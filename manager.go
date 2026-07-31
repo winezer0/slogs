@@ -51,10 +51,11 @@ func (m *Manager) Create(name string, config Config) (*Logger, error) {
 	if name == "" {
 		return nil, fmt.Errorf("logging: logger name cannot be empty")
 	}
-	m.mu.RLock()
-	_, exists := m.loggers[name]
-	m.mu.RUnlock()
-	if exists {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.loggers[name]; exists {
 		return nil, fmt.Errorf("logging: logger already exists: %s", name)
 	}
 
@@ -63,9 +64,7 @@ func (m *Manager) Create(name string, config Config) (*Logger, error) {
 		return nil, err
 	}
 
-	m.mu.Lock()
 	m.loggers[name] = logger
-	m.mu.Unlock()
 	return logger, nil
 }
 

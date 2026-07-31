@@ -393,14 +393,13 @@ func TestManager_CloseAll(t *testing.T) {
 
 func TestDefault_LazyInit(t *testing.T) {
 	// Reset global state for test isolation.
-	defaultMu.Lock()
-	oldLogger := defaultLogger
-	defaultLogger = nil
-	defaultMu.Unlock()
+	oldLogger := defaultLogger.Load()
+	defaultLogger.Store(nil)
 	defer func() {
-		defaultMu.Lock()
-		defaultLogger = oldLogger
-		defaultMu.Unlock()
+		// Restore old logger; close the lazy-init one created by this test.
+		if l := defaultLogger.Swap(oldLogger); l != nil {
+			l.Close()
+		}
 	}()
 
 	logger := Default()
@@ -412,8 +411,13 @@ func TestDefault_LazyInit(t *testing.T) {
 }
 
 func TestSetDefault(t *testing.T) {
-	oldLogger := defaultLogger
-	defer func() { defaultLogger = oldLogger }()
+	oldLogger := defaultLogger.Load()
+	defer func() {
+		// Restore old logger; close the test's custom logger.
+		if l := defaultLogger.Swap(oldLogger); l != nil {
+			l.Close()
+		}
+	}()
 
 	custom, err := NewLogger(NewConfig("debug", "", "json"))
 	if err != nil {
@@ -455,14 +459,12 @@ func TestEnsureDir_ExistingDir(t *testing.T) {
 
 func TestPackageLevelFunctions(t *testing.T) {
 	// Reset for isolation.
-	defaultMu.Lock()
-	oldLogger := defaultLogger
-	defaultLogger = nil
-	defaultMu.Unlock()
+	oldLogger := defaultLogger.Load()
+	defaultLogger.Store(nil)
 	defer func() {
-		defaultMu.Lock()
-		defaultLogger = oldLogger
-		defaultMu.Unlock()
+		if l := defaultLogger.Swap(oldLogger); l != nil {
+			l.Close()
+		}
 	}()
 
 	// These should not panic (lazy init).
@@ -511,14 +513,12 @@ func TestManager_CloseAllWithDefaultLogger(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Init a default logger with file output.
-	defaultMu.Lock()
-	oldLogger := defaultLogger
-	defaultLogger = nil
-	defaultMu.Unlock()
+	oldLogger := defaultLogger.Load()
+	defaultLogger.Store(nil)
 	defer func() {
-		defaultMu.Lock()
-		defaultLogger = oldLogger
-		defaultMu.Unlock()
+		if l := defaultLogger.Swap(oldLogger); l != nil {
+			l.Close()
+		}
 	}()
 
 	cfg := NewConfig("info", filepath.Join(tmpDir, "default.log"), "json")
@@ -538,7 +538,7 @@ func TestManager_CloseAllWithDefaultLogger(t *testing.T) {
 	}
 
 	// After CloseAll, default logger should be nil (re-initializable).
-	if defaultLogger != nil {
+	if defaultLogger.Load() != nil {
 		t.Error("defaultLogger should be nil after CloseAll")
 	}
 

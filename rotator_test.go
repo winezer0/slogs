@@ -306,8 +306,8 @@ func TestRotator_DefaultFilename(t *testing.T) {
 	if name == "" {
 		t.Error("default filename should not be empty")
 	}
-	if !strings.HasSuffix(name, "-mgsast.log") {
-		t.Errorf("default filename should end with -mgsast.log, got: %s", name)
+	if !strings.HasSuffix(name, "-slogs.log") {
+		t.Errorf("default filename should end with -slogs.log, got: %s", name)
 	}
 }
 

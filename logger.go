@@ -122,7 +122,8 @@ func newConsoleHandler(format string, level slog.Level) slog.Handler {
 	return slog.NewTextHandler(os.Stderr, opts)
 }
 
-// newFileHandler creates a JSON file handler with built-in rotation.
+// newFileHandler creates a file handler with built-in rotation.
+// Format is "text" (human-readable) or "json" (structured).
 func newFileHandler(config Config, level slog.Level) (slog.Handler, io.Closer, error) {
 	if err := ensureDir(config.FilePath); err != nil {
 		return nil, nil, fmt.Errorf("logging: create log dir: %w", err)
@@ -135,8 +136,10 @@ func newFileHandler(config Config, level slog.Level) (slog.Handler, io.Closer, e
 		Compress:   config.Compress,
 	}
 	opts := &slog.HandlerOptions{Level: level, AddSource: true}
-	handler := slog.NewJSONHandler(rotator, opts)
-	return handler, rotator, nil
+	if strings.EqualFold(config.Format, "text") {
+		return slog.NewTextHandler(rotator, opts), rotator, nil
+	}
+	return slog.NewJSONHandler(rotator, opts), rotator, nil
 }
 
 // fanoutHandler returns a single handler that dispatches to multiple handlers.

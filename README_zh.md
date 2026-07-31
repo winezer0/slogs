@@ -7,7 +7,7 @@
 ## 特性
 
 - **零外部依赖** — 基于 `log/slog`（Go 1.21+ 标准库），文件轮转内置（源自 lumberjack MIT 协议，已 vendor 化）
-- **双目标输出** — 控制台（stderr）+ 文件（JSON），通过内置 `multiHandler` fanout 分发
+- **双目标输出** — 控制台（stderr）+ 文件，通过内置 `multiHandler` fanout 分发
 - **文件轮转** — 内置 `Rotator`，支持按大小/数量/天数自动轮转 + gzip 压缩
 - **结构化属性** — `With()` 附加 key-value 上下文，贯穿所有输出目标
 - **命名日志器** — `Manager` 管理多个隔离的命名日志器实例
@@ -101,7 +101,7 @@ logging:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `Level` | string | `"info"` | 最低日志级别：debug、info、warn、error |
-| `Format` | string | `"text"` | 控制台格式：text 或 json |
+| `Format` | string | `"text"` | 控制台和文件输出格式：text 或 json |
 | `FilePath` | string | `""` | 日志文件路径；为空则禁用文件输出 |
 | `MaxSize` | int | `100` | 单文件最大 MB，超出触发轮转 |
 | `MaxBackups` | int | `3` | 保留旧文件最大数量 |
@@ -129,7 +129,7 @@ time=2026-07-27T18:00:00.000+08:00 level=INFO source=main.go:42 msg="server star
 {"time":"2026-07-27T18:00:00.000+08:00","level":"INFO","source":{"function":"main.main","file":"main.go","line":42},"msg":"server started","port":8080}
 ```
 
-**文件输出（始终 JSON）：**
+**文件输出（格式由 `Config.Format` 决定）：**
 ```json
 {"time":"2026-07-27T18:00:00.000+08:00","level":"INFO","source":{"function":"main.main","file":"main.go","line":42},"msg":"server started","port":8080}
 ```

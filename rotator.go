@@ -223,7 +223,7 @@ func (r *Rotator) filename() string {
 	if r.Filename != "" {
 		return r.Filename
 	}
-	name := filepath.Base(os.Args[0]) + "-mgsast.log"
+	name := filepath.Base(os.Args[0]) + "-slogs.log"
 	return filepath.Join(os.TempDir(), name)
 }
 
@@ -406,28 +406,25 @@ func compressLogFile(src, dst string) (err error) {
 	gz := gzip.NewWriter(gzf)
 
 	defer func() {
+		// On error path, close gz and remove the partial output.
 		if err != nil {
+			gz.Close()
 			os.Remove(dst)
 			err = fmt.Errorf("failed to compress log file: %v", err)
 		}
 	}()
 
-	if _, err := io.Copy(gz, f); err != nil {
+	if _, err = io.Copy(gz, f); err != nil {
 		return err
 	}
-	if err := gz.Close(); err != nil {
+	if err = gz.Close(); err != nil {
 		return err
 	}
-	if err := gzf.Close(); err != nil {
+	// Close source before removing it (Windows requires this).
+	if err = f.Close(); err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Remove(src); err != nil {
-		return err
-	}
-	return nil
+	return os.Remove(src)
 }
 
 // logInfo is a convenience struct to return the filename and its embedded timestamp.

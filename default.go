@@ -3,10 +3,11 @@ package slogs
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 var (
-	defaultLogger *Logger
+	defaultLogger atomic.Pointer[Logger]
 	defaultMu     sync.Mutex
 )
 
@@ -14,10 +15,14 @@ var (
 // Once the default logger has been initialized (either via Init or lazy init),
 // subsequent calls are no-ops and return nil.
 func Init(config Config) error {
+	if defaultLogger.Load() != nil {
+		return nil
+	}
+
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 
-	if defaultLogger != nil {
+	if defaultLogger.Load() != nil {
 		return nil
 	}
 
@@ -25,25 +30,31 @@ func Init(config Config) error {
 	if err != nil {
 		return err
 	}
-	defaultLogger = logger
+	defaultLogger.Store(logger)
 	return nil
 }
 
 // ensureDefault lazily initializes the default logger with DefaultConfig
 // and returns the current default logger (nil if initialization failed).
 func ensureDefault() *Logger {
+	if l := defaultLogger.Load(); l != nil {
+		return l
+	}
+
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 
-	if defaultLogger == nil {
-		logger, err := NewLogger(DefaultConfig())
-		if err != nil {
-			fmt.Printf("logging: init default logger failed: %v\n", err)
-			return nil
-		}
-		defaultLogger = logger
+	if l := defaultLogger.Load(); l != nil {
+		return l
 	}
-	return defaultLogger
+
+	logger, err := NewLogger(DefaultConfig())
+	if err != nil {
+		fmt.Printf("logging: init default logger failed: %v\n", err)
+		return nil
+	}
+	defaultLogger.Store(logger)
+	return logger
 }
 
 // Default returns the global default logger, initializing it if necessary.
@@ -52,21 +63,22 @@ func Default() *Logger {
 }
 
 // SetDefault replaces the global default logger (useful for testing or late configuration).
+// The previous default logger is closed to prevent resource leaks.
 func SetDefault(logger *Logger) {
-	defaultMu.Lock()
-	defer defaultMu.Unlock()
-	defaultLogger = logger
+	old := defaultLogger.Swap(logger)
+	if old != nil {
+		old.Close()
+	}
 }
 
-// closeDefault closes the default logger and resets it to nil.
-// Only callers that hold defaultMu should call this.
+// closeDefault atomically replaces the default logger with nil and closes it.
+// Safe to call without holding defaultMu.
 func closeDefault() error {
-	if defaultLogger == nil {
+	l := defaultLogger.Swap(nil)
+	if l == nil {
 		return nil
 	}
-	err := defaultLogger.Close()
-	defaultLogger = nil
-	return err
+	return l.Close()
 }
 
 // Debug logs at debug level using the default logger.
