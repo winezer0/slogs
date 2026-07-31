@@ -35,7 +35,13 @@ func GetLogger(name string) (*Logger, bool) {
 	return defaultManager().Get(name)
 }
 
-// CloseAll closes all managed loggers and resets the registry.
+// RemoveLogger removes and closes a named logger from the registry.
+func RemoveLogger(name string) error {
+	return defaultManager().Remove(name)
+}
+
+// CloseAll closes all managed loggers, closes the default logger,
+// and resets the registry.
 func CloseAll() error {
 	return defaultManager().CloseAll()
 }
@@ -71,7 +77,23 @@ func (m *Manager) Get(name string) (*Logger, bool) {
 	return logger, ok
 }
 
-// CloseAll closes all managed loggers and clears the registry.
+// Remove removes and closes a named logger from the registry.
+// Returns an error if the logger does not exist.
+func (m *Manager) Remove(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logger, ok := m.loggers[name]
+	if !ok {
+		return fmt.Errorf("logging: logger not found: %s", name)
+	}
+
+	delete(m.loggers, name)
+	return logger.Close()
+}
+
+// CloseAll closes all managed loggers, closes the default logger,
+// and clears the registry.
 func (m *Manager) CloseAll() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -83,5 +105,11 @@ func (m *Manager) CloseAll() error {
 		}
 	}
 	m.loggers = make(map[string]*Logger)
+
+	// Close and reset the default logger so Init can be called again.
+	if err := closeDefault(); err != nil {
+		errs = append(errs, fmt.Errorf("logging: close default logger: %w", err))
+	}
+
 	return errors.Join(errs...)
 }

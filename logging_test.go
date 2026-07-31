@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -394,14 +393,15 @@ func TestManager_CloseAll(t *testing.T) {
 
 func TestDefault_LazyInit(t *testing.T) {
 	// Reset global state for test isolation.
+	defaultMu.Lock()
 	oldLogger := defaultLogger
-	oldOnce := defaultOnce
-	defer func() {
-		defaultLogger = oldLogger
-		defaultOnce = oldOnce
-	}()
 	defaultLogger = nil
-	defaultOnce = sync.Once{}
+	defaultMu.Unlock()
+	defer func() {
+		defaultMu.Lock()
+		defaultLogger = oldLogger
+		defaultMu.Unlock()
+	}()
 
 	logger := Default()
 	if logger == nil {
@@ -455,14 +455,15 @@ func TestEnsureDir_ExistingDir(t *testing.T) {
 
 func TestPackageLevelFunctions(t *testing.T) {
 	// Reset for isolation.
+	defaultMu.Lock()
 	oldLogger := defaultLogger
-	oldOnce := defaultOnce
-	defer func() {
-		defaultLogger = oldLogger
-		defaultOnce = oldOnce
-	}()
 	defaultLogger = nil
-	defaultOnce = sync.Once{}
+	defaultMu.Unlock()
+	defer func() {
+		defaultMu.Lock()
+		defaultLogger = oldLogger
+		defaultMu.Unlock()
+	}()
 
 	// These should not panic (lazy init).
 	Debug("pkg debug")
@@ -473,4 +474,94 @@ func TestPackageLevelFunctions(t *testing.T) {
 	Infof("pkg %s", "infof")
 	Warnf("pkg %s", "warnf")
 	Errorf("pkg %s", "errorf")
+}
+
+// --- Manager Remove tests ---
+
+func TestManager_Remove(t *testing.T) {
+	m := &Manager{loggers: make(map[string]*Logger)}
+	cfg := DefaultConfig()
+
+	logger, err := m.Create("removable", cfg)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Close the logger ourselves to avoid file leak (it's console-only, fine).
+	if err := m.Remove("removable"); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+
+	_, ok := m.Get("removable")
+	if ok {
+		t.Error("logger should be removed from registry")
+	}
+	_ = logger // already closed by Remove
+}
+
+func TestManager_RemoveNotFound(t *testing.T) {
+	m := &Manager{loggers: make(map[string]*Logger)}
+	err := m.Remove("nonexistent")
+	if err == nil {
+		t.Error("Remove nonexistent should return error")
+	}
+}
+
+func TestManager_CloseAllWithDefaultLogger(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Init a default logger with file output.
+	defaultMu.Lock()
+	oldLogger := defaultLogger
+	defaultLogger = nil
+	defaultMu.Unlock()
+	defer func() {
+		defaultMu.Lock()
+		defaultLogger = oldLogger
+		defaultMu.Unlock()
+	}()
+
+	cfg := NewConfig("info", filepath.Join(tmpDir, "default.log"), "json")
+	if err := Init(cfg); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Create a managed logger too.
+	_, err := CreateLogger("managed", NewConfig("info", filepath.Join(tmpDir, "managed.log"), "json"))
+	if err != nil {
+		t.Fatalf("CreateLogger failed: %v", err)
+	}
+
+	// CloseAll should close both managed and default loggers.
+	if err := CloseAll(); err != nil {
+		t.Fatalf("CloseAll failed: %v", err)
+	}
+
+	// After CloseAll, default logger should be nil (re-initializable).
+	if defaultLogger != nil {
+		t.Error("defaultLogger should be nil after CloseAll")
+	}
+
+	// Default logger should be re-initializable on next use.
+	Info("re-initialized after closeall")
+}
+
+func TestPackageLevel_RemoveLogger(t *testing.T) {
+	// Clean up after test.
+	defer CloseAll()
+
+	cfg := NewConfig("debug", "", "text")
+	_, err := CreateLogger("test-remove", cfg)
+	if err != nil {
+		t.Fatalf("CreateLogger failed: %v", err)
+	}
+
+	if err := RemoveLogger("test-remove"); err != nil {
+		t.Fatalf("RemoveLogger failed: %v", err)
+	}
+
+	_, ok := GetLogger("test-remove")
+	if ok {
+		t.Error("logger should be removed")
+	}
 }

@@ -7,69 +7,120 @@ import (
 
 var (
 	defaultLogger *Logger
-	defaultOnce   sync.Once
+	defaultMu     sync.Mutex
 )
 
 // Init initializes the global default logger with the given configuration.
-// Subsequent calls are no-ops (first call wins).
+// Once the default logger has been initialized (either via Init or lazy init),
+// subsequent calls are no-ops and return nil.
 func Init(config Config) error {
-	var initErr error
-	defaultOnce.Do(func() {
-		logger, err := NewLogger(config)
-		if err != nil {
-			initErr = err
-			return
-		}
-		defaultLogger = logger
-	})
-	return initErr
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+
+	if defaultLogger != nil {
+		return nil
+	}
+
+	logger, err := NewLogger(config)
+	if err != nil {
+		return err
+	}
+	defaultLogger = logger
+	return nil
 }
 
-// ensureDefault lazily initializes the default logger with DefaultConfig.
-func ensureDefault() {
+// ensureDefault lazily initializes the default logger with DefaultConfig
+// and returns the current default logger (nil if initialization failed).
+func ensureDefault() *Logger {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+
 	if defaultLogger == nil {
-		defaultOnce.Do(func() {
-			logger, err := NewLogger(DefaultConfig())
-			if err != nil {
-				fmt.Printf("logging: init default logger failed: %v\n", err)
-				return
-			}
-			defaultLogger = logger
-		})
+		logger, err := NewLogger(DefaultConfig())
+		if err != nil {
+			fmt.Printf("logging: init default logger failed: %v\n", err)
+			return nil
+		}
+		defaultLogger = logger
 	}
+	return defaultLogger
 }
 
 // Default returns the global default logger, initializing it if necessary.
 func Default() *Logger {
-	ensureDefault()
-	return defaultLogger
+	return ensureDefault()
 }
 
 // SetDefault replaces the global default logger (useful for testing or late configuration).
 func SetDefault(logger *Logger) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
 	defaultLogger = logger
 }
 
+// closeDefault closes the default logger and resets it to nil.
+// Only callers that hold defaultMu should call this.
+func closeDefault() error {
+	if defaultLogger == nil {
+		return nil
+	}
+	err := defaultLogger.Close()
+	defaultLogger = nil
+	return err
+}
+
 // Debug logs at debug level using the default logger.
-func Debug(msg string, args ...any) { ensureDefault(); defaultLogger.Debug(msg, args...) }
+func Debug(msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Debug(msg, args...)
+	}
+}
 
 // Info logs at info level using the default logger.
-func Info(msg string, args ...any) { ensureDefault(); defaultLogger.Info(msg, args...) }
+func Info(msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Info(msg, args...)
+	}
+}
 
 // Warn logs at warn level using the default logger.
-func Warn(msg string, args ...any) { ensureDefault(); defaultLogger.Warn(msg, args...) }
+func Warn(msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Warn(msg, args...)
+	}
+}
 
 // Error logs at error level using the default logger.
-func Error(msg string, args ...any) { ensureDefault(); defaultLogger.Error(msg, args...) }
+func Error(msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Error(msg, args...)
+	}
+}
 
 // Debugf logs a formatted message at debug level using the default logger.
-func Debugf(template string, args ...any) { ensureDefault(); defaultLogger.Debugf(template, args...) }
+func Debugf(template string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Debugf(template, args...)
+	}
+}
 
 // Infof logs a formatted message at info level using the default logger.
-func Infof(template string, args ...any) { ensureDefault(); defaultLogger.Infof(template, args...) }
+func Infof(template string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Infof(template, args...)
+	}
+}
 
 // Warnf logs a formatted message at warn level using the default logger.
-func Warnf(template string, args ...any) { ensureDefault(); defaultLogger.Warnf(template, args...) }
+func Warnf(template string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Warnf(template, args...)
+	}
+}
 
 // Errorf logs a formatted message at error level using the default logger.
-func Errorf(template string, args ...any) { ensureDefault(); defaultLogger.Errorf(template, args...) }
+func Errorf(template string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Errorf(template, args...)
+	}
+}
