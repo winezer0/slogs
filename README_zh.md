@@ -7,7 +7,7 @@
 ## 特性
 
 - **零外部依赖** — 基于 `log/slog`（Go 1.21+ 标准库），文件轮转内置（源自 lumberjack MIT 协议，已 vendor 化）
-- **双目标输出** — 控制台（stderr）+ 文件，通过内置 `multiHandler` fanout 分发
+- **双目标输出** — 控制台（stdout）+ 文件，通过内置 `multiHandler` fanout 分发
 - **文件轮转** — 内置 `Rotator`，支持按大小/数量/天数自动轮转 + gzip 压缩
 - **结构化属性** — `With()` 附加 key-value 上下文，贯穿所有输出目标
 - **命名日志器** — `Manager` 管理多个隔离的命名日志器实例
@@ -44,14 +44,14 @@ slogs.Debug("initialized with file output")
 ### 独立 Logger 实例
 
 ```go
-cfg := slogs.Config{
-    Level:      "info",
-    Format:     "text",
-    FilePath:   "logs/audit.log",
-    MaxSize:    50,
-    MaxBackups: 5,
-    MaxAge:     14,
-    Compress:   true,
+cfg := slogs.LogConfig{
+    ConsoleLevel: "info",  // 控制台级别（空 = "info"）
+    // FileLevel 为空时默认为 "debug" → 文件保留 debug 日志
+    LogFilePath:  "logs/audit.log",
+    MaxSize:      50,
+    MaxBackups:   5,
+    MaxAge:       14,
+    Compress:     true,
 }
 logger, err := slogs.NewLogger(cfg)
 if err != nil {
@@ -89,24 +89,44 @@ slogLogger := logger.Slog() // *slog.Logger，可直接传递给 eino 等框架
 
 ```yaml
 logging:
-  level: info          # debug | info | warn | error
-  format: text         # text（人类可读）| json（结构化）
-  file_path: ""        # 日志文件路径，空 = 仅控制台
-  max_size: 100        # 单文件最大 MB
-  max_backups: 3       # 保留旧文件数
-  max_age: 30          # 保留天数
-  compress: true       # 轮转文件是否 gzip 压缩
+  console_level: info   # 控制台：debug | info | warn | error（空 = info）
+  file_level: ""        # 文件：debug | info | warn | error（空 = debug）
+  console_format: ""    # 控制台："" | text | json | off | mask 字符串如 "TLCM"（空 = mask "LCM"）
+  log_file_format: ""   # 文件："" | text | json | off | mask 字符串如 "CM"（空 = json）
+  log_file_path: ""     # 日志文件路径，空 = 仅控制台
+  max_size: 100         # 单文件最大 MB
+  max_backups: 3        # 保留旧文件数
+  max_age: 30           # 保留天数
+  compress: true        # 轮转文件是否 gzip 压缩
 ```
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `Level` | string | `"info"` | 最低日志级别：debug、info、warn、error |
-| `Format` | string | `"text"` | 控制台和文件输出格式：text 或 json |
-| `FilePath` | string | `""` | 日志文件路径；为空则禁用文件输出 |
+| `ConsoleLevel` | string | `"info"` | 控制台最低日志级别：debug、info、warn、error |
+| `FileLevel` | string | `"debug"` | 文件最低日志级别：debug、info、warn、error |
+| `ConsoleFormat` | string | `""` | 控制台格式：`text`、`json`、`off` 或 mask 字符串（如 `"TLCM"`）；空 = mask `"LCM"` |
+| `LogFileFormat` | string | `""` | 文件格式：`text`、`json`、`off` 或 mask 字符串（如 `"CM"`）；空 = json |
+| `LogFilePath` | string | `""` | 日志文件路径；为空则禁用文件输出 |
 | `MaxSize` | int | `100` | 单文件最大 MB，超出触发轮转 |
 | `MaxBackups` | int | `3` | 保留旧文件最大数量 |
 | `MaxAge` | int | `30` | 保留旧文件最大天数 |
 | `Compress` | bool | `true` | 轮转文件是否 gzip 压缩 |
+
+> 控制台与文件级别相互独立。例如 `ConsoleLevel: "info"` 且 `FileLevel` 为空（默认 `"debug"`）时，控制台保持安静，而文件仍会记录 debug 日志。
+
+> **"off" 语义：** format 字段设为 `"off"` 即关闭对应目标输出（控制台或文件）。即使 `LogFilePath` 非空，文件目标也会被 `"off"` 关闭。若所有目标都被关闭，logger 静默丢弃所有日志记录。
+
+### `NewConfig` 便捷映射
+
+`NewConfig(level, filePath, format)` 保留旧的三参数签名，将 `format` 参数原样存入 `ConsoleFormat`：
+
+| `format` 参数 | 结果 |
+|---------------|------|
+| `"text"`、`"json"`、`"off"` | 控制台 text / json / 关闭 |
+| mask 字符串，如 `"TLCM"`、`"CM"` | 控制台 mask 格式 |
+| `""`（空） | 控制台默认 mask `"LCM"` |
+
+文件输出默认为 `LogFileFormat = ""` → 设置文件路径时使用 json。
 
 ## 日志级别
 
@@ -119,19 +139,46 @@ logging:
 
 ## 输出格式
 
-**控制台 text 模式（stderr）：**
+**控制台 text 模式（stdout）** — 各级别实际输出：
 ```
-time=2026-07-27T18:00:00.000+08:00 level=INFO source=main.go:42 msg="server started" port=8080
+time=2026-08-01T03:12:20.090+08:00 level=DEBUG source=logger.go:69 msg="debug message" db=users slow=true
+time=2026-08-01T03:12:20.116+08:00 level=INFO source=logger.go:72 msg="server started" port=8080
+time=2026-08-01T03:12:20.116+08:00 level=WARN source=logger.go:75 msg="disk low" free_gb=1.5
+time=2026-08-01T03:12:20.116+08:00 level=ERROR source=logger.go:78 msg="connection failed" err=timeout
 ```
+每行依次为：`time`（ISO8601 含毫秒）、`level`、`source`（basename:行号，经 `ReplaceAttr` 缩短）、`msg`，其后是 `key=value` 属性。
 
-**控制台 json 模式（stderr）：**
+**控制台 json 模式（stdout）：**
 ```json
 {"time":"2026-07-27T18:00:00.000+08:00","level":"INFO","source":{"function":"main.main","file":"main.go","line":42},"msg":"server started","port":8080}
 ```
 
-**文件输出（格式由 `Config.Format` 决定）：**
+**文件输出（格式由 `LogFileFormat` 决定）：**
 ```json
 {"time":"2026-07-27T18:00:00.000+08:00","level":"INFO","source":{"function":"main.main","file":"main.go","line":42},"msg":"server started","port":8080}
+```
+
+### Mask 格式
+
+Mask 格式只渲染选中的字段，输出紧凑单行，由 mask 字符串控制：`T`=时间、`L`=级别、`C`=调用者、`M`=消息（任意组合，如 `"TLCM"`、`"CM"`、`"M"`）。直接在 `ConsoleFormat`/`LogFileFormat` 上设置 mask —— 任何不是 `text`/`json`/`off`/空 的值都会被当作 mask 字符串。
+
+```go
+cfg := slogs.LogConfig{
+    ConsoleLevel:  "info",
+    ConsoleFormat: "TLC",   // 控制台：时间 + 级别 + 调用者
+    LogFileFormat: "json",  // 文件：普通 json，与控制台互不影响
+    LogFilePath:   "logs/app.log",
+}
+```
+
+**控制台 `ConsoleFormat: "TLCM"`（stdout）：**
+```
+2026-07-27T18:00:00+08:00 INFO main.go:42 server started
+```
+
+**控制台 `ConsoleFormat: "M"`（stdout）：**
+```
+server started
 ```
 
 ## 文件结构
@@ -143,6 +190,7 @@ time=2026-07-27T18:00:00.000+08:00 level=INFO source=main.go:42 msg="server star
 | `logger.go` | Logger 封装、multiHandler、级别解析、文件轮转接入 |
 | `default.go` | 全局默认日志器 + 包级便捷函数 |
 | `manager.go` | 命名日志器注册/获取/统一关闭 |
+| `mask_handler.go` | Mask 格式处理器（T/L/C/M 字段选择） |
 | `rotator.go` | 内置日志文件轮转器（源自 lumberjack） |
 | `chown.go` | 非 Linux 平台 chown 空实现 |
 | `chown_linux.go` | Linux 文件所有权保持 |

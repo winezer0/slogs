@@ -19,7 +19,7 @@ func ExampleInit() {
 		return
 	}
 	slogs.Debug("initialized with file output")
-	// Output is written to stderr and the log file.
+	// Output is written to stdout and the log file.
 }
 
 // ExampleDefault demonstrates using the global default logger with zero configuration.
@@ -33,14 +33,13 @@ func ExampleNewLogger() {
 	dir, _ := os.MkdirTemp("", "slogs-example")
 	defer os.RemoveAll(dir)
 
-	cfg := slogs.Config{
-		Level:      "info",
-		Format:     "text",
-		FilePath:   filepath.Join(dir, "audit.log"),
-		MaxSize:    50,
-		MaxBackups: 5,
-		MaxAge:     14,
-		Compress:   true,
+	cfg := slogs.LogConfig{
+		ConsoleLevel: "info",
+		LogFilePath:  filepath.Join(dir, "audit.log"),
+		MaxSize:      50,
+		MaxBackups:   5,
+		MaxAge:       14,
+		Compress:     true,
 	}
 	logger, err := slogs.NewLogger(cfg)
 	if err != nil {
@@ -65,7 +64,7 @@ func ExampleCreateLogger() {
 	defer os.RemoveAll(dir)
 	defer slogs.CloseAll()
 
-	_, err := slogs.CreateLogger("scan", slogs.NewConfig("info", filepath.Join(dir, "scan.log"), "json"))
+	_, err := slogs.CreateLogger("scan", slogs.NewConfig("info", filepath.Join(dir, "scan.log"), "off"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return
@@ -98,23 +97,25 @@ func ExampleSetDefault() {
 // ExampleDefaultConfig demonstrates obtaining the default configuration.
 func ExampleDefaultConfig() {
 	cfg := slogs.DefaultConfig()
-	fmt.Println(cfg.Level)
-	fmt.Println(cfg.Format)
+	fmt.Println(cfg.ConsoleLevel)
+	fmt.Println(cfg.FileLevel)
 	fmt.Println(cfg.MaxSize)
 	// Output:
 	// info
-	// text
+	// debug
 	// 100
 }
 
 // ExampleNewConfig demonstrates creating a configuration with custom parameters.
 func ExampleNewConfig() {
 	cfg := slogs.NewConfig("error", "/var/log/myapp.log", "json")
-	fmt.Println(cfg.Level)
-	fmt.Println(cfg.FilePath)
+	fmt.Println(cfg.ConsoleLevel)
+	fmt.Println(cfg.FileLevel)
+	fmt.Println(cfg.LogFilePath)
 	fmt.Println(cfg.Compress)
 	// Output:
 	// error
+	// debug
 	// /var/log/myapp.log
 	// true
 }

@@ -3,7 +3,7 @@
 //
 // # Features
 //
-//   - Dual-target output: console (stderr) and file (JSON), dispatched via a
+//   - Dual-target output: console (stdout) and file (JSON), dispatched via a
 //     built-in fan-out multiHandler.
 //   - File rotation: built-in Rotator (adapted from lumberjack, MIT License)
 //     supports size-based rolling, backup retention, age-based cleanup, and
@@ -31,10 +31,10 @@
 //
 // Standalone logger instance:
 //
-//	logger, err := slogs.NewLogger(slogs.Config{
-//	    Level:    "info",
-//	    FilePath: "logs/audit.log",
-//	    MaxSize:  50,
+//	logger, err := slogs.NewLogger(slogs.LogConfig{
+//	    ConsoleLevel: "info",
+//	    LogFilePath:  "logs/audit.log",
+//	    MaxSize:      50,
 //	})
 //	if err != nil {
 //	    log.Fatal(err)
@@ -50,15 +50,23 @@
 //
 // # Configuration
 //
-// The [Config] struct controls logging behavior:
+// The [LogConfig] struct controls logging behavior:
 //
-//   - Level: minimum log level ("debug", "info", "warn", "error").
-//   - Format: console format ("text" or "json").
-//   - FilePath: log file path; empty disables file output.
+//   - ConsoleLevel: minimum log level for console output ("debug", "info", "warn", "error";
+//     empty defaults to "info").
+//   - FileLevel: minimum log level for file output ("debug", "info", "warn", "error";
+//     empty defaults to "debug").
+//   - ConsoleFormat: console output format: "text" or "json"; empty = mask "LCM";
+//     a mask string (e.g. "TLCM") enables mask format; "off" disables console.
+//   - LogFileFormat: file output format (same options; empty = json).
+//   - LogFilePath: log file path; empty disables file output.
 //   - MaxSize: max megabytes per file before rotation (default 100).
 //   - MaxBackups: max old files to retain (default 3).
 //   - MaxAge: max days to retain old files (default 30).
 //   - Compress: gzip-compress rotated files (default true).
+//
+// Console and file levels are independent: set ConsoleLevel to "info" for a
+// quiet console while FileLevel defaults to "debug" so files capture debug logs.
 //
 // # Thread Safety
 //

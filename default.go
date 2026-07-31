@@ -14,7 +14,7 @@ var (
 // Init initializes the global default logger with the given configuration.
 // Once the default logger has been initialized (either via Init or lazy init),
 // subsequent calls are no-ops and return nil.
-func Init(config Config) error {
+func Init(config LogConfig) error {
 	if defaultLogger.Load() != nil {
 		return nil
 	}

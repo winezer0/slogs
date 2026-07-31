@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,14 +16,17 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Level != "info" {
-		t.Errorf("expected level=info, got %q", cfg.Level)
+	if cfg.ConsoleLevel != "info" {
+		t.Errorf("expected console_level=info, got %q", cfg.ConsoleLevel)
 	}
-	if cfg.Format != "text" {
-		t.Errorf("expected format=text, got %q", cfg.Format)
+	if cfg.FileLevel != "debug" {
+		t.Errorf("expected file_level=debug, got %q", cfg.FileLevel)
 	}
-	if cfg.FilePath != "" {
-		t.Errorf("expected empty file_path, got %q", cfg.FilePath)
+	if cfg.ConsoleFormat != "LCM" {
+		t.Errorf("expected empty console_format, got %q", cfg.ConsoleFormat)
+	}
+	if cfg.LogFilePath != "" {
+		t.Errorf("expected empty file_path, got %q", cfg.LogFilePath)
 	}
 	if cfg.MaxSize != 100 {
 		t.Errorf("expected max_size=100, got %d", cfg.MaxSize)
@@ -38,30 +42,37 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestNewConfig_Defaults(t *testing.T) {
+func TestNewConfig(t *testing.T) {
 	tests := []struct {
-		name       string
-		level      string
-		filePath   string
-		format     string
-		wantLevel  string
-		wantFormat string
+		name          string
+		level         string
+		filePath      string
+		format        string
+		wantLevel     string
+		wantCF        string // ConsoleFormat
+		wantFileLevel string
 	}{
-		{"all empty", "", "", "", "info", "text"},
-		{"custom level", "debug", "/tmp/app.log", "json", "debug", "json"},
-		{"warn level", "warn", "", "text", "warn", "text"},
+		{"empty format", "", "", "", "info", "", "debug"},
+		{"text format", "debug", "/tmp/app.log", "text", "debug", "text", "debug"},
+		{"json format", "warn", "", "json", "warn", "json", "debug"},
+		{"off format", "error", "", "off", "error", "off", "debug"},
+		{"mask string", "debug", "/tmp/app.log", "TLCM", "debug", "TLCM", "debug"},
+		{"lowercase mask", "debug", "/tmp/app.log", "cm", "debug", "cm", "debug"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := NewConfig(tt.level, tt.filePath, tt.format)
-			if cfg.Level != tt.wantLevel {
-				t.Errorf("level: want %q, got %q", tt.wantLevel, cfg.Level)
+			if cfg.ConsoleLevel != tt.wantLevel {
+				t.Errorf("console_level: want %q, got %q", tt.wantLevel, cfg.ConsoleLevel)
 			}
-			if cfg.Format != tt.wantFormat {
-				t.Errorf("format: want %q, got %q", tt.wantFormat, cfg.Format)
+			if cfg.ConsoleFormat != tt.wantCF {
+				t.Errorf("console_format: want %q, got %q", tt.wantCF, cfg.ConsoleFormat)
 			}
-			if cfg.FilePath != tt.filePath {
-				t.Errorf("file_path: want %q, got %q", tt.filePath, cfg.FilePath)
+			if cfg.LogFilePath != tt.filePath {
+				t.Errorf("file_path: want %q, got %q", tt.filePath, cfg.LogFilePath)
+			}
+			if cfg.FileLevel != tt.wantFileLevel {
+				t.Errorf("file_level: want %q, got %q", tt.wantFileLevel, cfg.FileLevel)
 			}
 		})
 	}
@@ -96,33 +107,38 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
-// --- Logger tests ---
+// --- parseFileLevel tests ---
 
-func TestNewLogger_ConsoleOnly(t *testing.T) {
-	logger, err := NewLogger(DefaultConfig())
-	if err != nil {
-		t.Fatalf("NewLogger failed: %v", err)
+func TestParseFileLevel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  slog.Level
+	}{
+		{"", slog.LevelDebug},
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"unknown", slog.LevelInfo},
 	}
-	defer logger.Close()
-
-	if logger.Slog() == nil {
-		t.Fatal("Slog() should not be nil")
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := parseFileLevel(tt.input)
+			if got != tt.want {
+				t.Errorf("parseFileLevel(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
 	}
-	// Should not panic on log calls.
-	logger.Debug("debug message", "key", "value")
-	logger.Info("info message")
-	logger.Warn("warn message")
-	logger.Error("error message")
-	logger.Debugf("debug %s", "formatted")
-	logger.Infof("info %d", 42)
-	logger.Warnf("warn %v", true)
-	logger.Errorf("error %v", nil)
 }
+
+// --- Logger tests ---
 
 func TestNewLogger_WithFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "test.log")
 	cfg := NewConfig("debug", logFile, "json")
+	cfg.LogFileFormat = "json"
 
 	logger, err := NewLogger(cfg)
 	if err != nil {
@@ -153,7 +169,7 @@ func TestNewLogger_WithFile(t *testing.T) {
 func TestNewLogger_FileCreatesDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "sub", "dir", "app.log")
-	cfg := NewConfig("info", logFile, "text")
+	cfg := NewConfig("info", logFile, "json")
 
 	logger, err := NewLogger(cfg)
 	if err != nil {
@@ -171,6 +187,7 @@ func TestLogger_With(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "with.log")
 	cfg := NewConfig("info", logFile, "json")
+	cfg.LogFileFormat = "json"
 
 	logger, err := NewLogger(cfg)
 	if err != nil {
@@ -193,6 +210,8 @@ func TestLogger_LevelFiltering(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "level.log")
 	cfg := NewConfig("error", logFile, "json")
+	cfg.LogFileFormat = "json"
+	cfg.FileLevel = "error" // explicit file level to test filtering
 
 	logger, err := NewLogger(cfg)
 	if err != nil {
@@ -211,6 +230,33 @@ func TestLogger_LevelFiltering(t *testing.T) {
 	}
 	if !strings.Contains(content, "should appear") {
 		t.Error("error message should be present")
+	}
+}
+
+// TestLogger_FileLevelDefaultsToDebug verifies that an empty FileLevel
+// records debug logs in the file even when the console level is higher.
+func TestLogger_FileLevelDefaultsToDebug(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "filedebug.log")
+	cfg := NewConfig("info", logFile, "json") // console=info, FileLevel="" → debug
+	cfg.LogFileFormat = "json"
+	cfg.ConsoleFormat = "off" // avoid console noise
+
+	logger, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("NewLogger failed: %v", err)
+	}
+	logger.Debug("debug should appear in file")
+	logger.Info("info should appear in file")
+	logger.Close()
+
+	data, _ := os.ReadFile(logFile)
+	content := string(data)
+	if !strings.Contains(content, "debug should appear in file") {
+		t.Error("debug message should appear in file when FileLevel is empty (defaults to debug)")
+	}
+	if !strings.Contains(content, "info should appear in file") {
+		t.Error("info message should appear in file")
 	}
 }
 
@@ -455,29 +501,6 @@ func TestEnsureDir_ExistingDir(t *testing.T) {
 	}
 }
 
-// --- Package-level convenience functions ---
-
-func TestPackageLevelFunctions(t *testing.T) {
-	// Reset for isolation.
-	oldLogger := defaultLogger.Load()
-	defaultLogger.Store(nil)
-	defer func() {
-		if l := defaultLogger.Swap(oldLogger); l != nil {
-			l.Close()
-		}
-	}()
-
-	// These should not panic (lazy init).
-	Debug("pkg debug")
-	Info("pkg info")
-	Warn("pkg warn")
-	Error("pkg error")
-	Debugf("pkg %s", "debugf")
-	Infof("pkg %s", "infof")
-	Warnf("pkg %s", "warnf")
-	Errorf("pkg %s", "errorf")
-}
-
 // --- Manager Remove tests ---
 
 func TestManager_Remove(t *testing.T) {
@@ -563,5 +586,315 @@ func TestPackageLevel_RemoveLogger(t *testing.T) {
 	_, ok := GetLogger("test-remove")
 	if ok {
 		t.Error("logger should be removed")
+	}
+}
+
+// --- Mask handler tests ---
+
+func TestMaskHandler_Format(t *testing.T) {
+	tests := []struct {
+		format string
+		check  []string // substrings that should appear
+		not    []string // substrings that should NOT appear
+	}{
+		{"TLCM", []string{"INFO", "logging_test.go", "test message"}, nil},
+		{"CM", []string{"logging_test.go", "test message"}, nil},
+		{"M", []string{"test message"}, []string{"INFO", "logging_test.go"}},
+		{"L", []string{"INFO"}, []string{"test message"}},
+		{"tlm", []string{"INFO", "test message"}, nil}, // lowercase "tlm" → uppercased "TLM" (T, L, M, no caller)
+	}
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			var buf bytes.Buffer
+			h := newMaskHandler(tt.format, slog.LevelDebug, &buf)
+			logger := slog.New(h)
+			logger.Info("test message", "key", "val")
+
+			output := buf.String()
+			for _, s := range tt.check {
+				if !strings.Contains(output, s) {
+					t.Errorf("output %q should contain %q", output, s)
+				}
+			}
+			for _, s := range tt.not {
+				if strings.Contains(output, s) {
+					t.Errorf("output %q should NOT contain %q", output, s)
+				}
+			}
+		})
+	}
+}
+
+func TestMaskHandler_Attrs(t *testing.T) {
+	var buf bytes.Buffer
+	h := newMaskHandler("TLCM", slog.LevelDebug, &buf)
+	logger := slog.New(h)
+	logger.Info("msg", "key1", "val1", "key2", 42)
+
+	output := buf.String()
+	if !strings.Contains(output, "key1=val1") {
+		t.Errorf("output should contain key1=val1, got: %s", output)
+	}
+	if !strings.Contains(output, "key2=42") {
+		t.Errorf("output should contain key2=42, got: %s", output)
+	}
+}
+
+func TestMaskHandler_WithAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	h := newMaskHandler("TLCM", slog.LevelDebug, &buf)
+	logger := slog.New(h).With("component", "test")
+	logger.Info("with attrs")
+
+	output := buf.String()
+	if !strings.Contains(output, "component=test") {
+		t.Errorf("output should contain component=test, got: %s", output)
+	}
+}
+
+func TestMaskHandler_WithGroup(t *testing.T) {
+	var buf bytes.Buffer
+	h := newMaskHandler("TLCM", slog.LevelDebug, &buf)
+	logger := slog.New(h).WithGroup("request").With("id", "abc")
+	logger.Info("grouped")
+
+	output := buf.String()
+	if !strings.Contains(output, "request.id=abc") {
+		t.Errorf("output should contain request.id=abc, got: %s", output)
+	}
+}
+
+func TestMaskHandler_LevelFiltering(t *testing.T) {
+	var buf bytes.Buffer
+	h := newMaskHandler("M", slog.LevelWarn, &buf)
+	logger := slog.New(h)
+	logger.Debug("should not appear")
+	logger.Info("should not appear either")
+	logger.Warn("should appear")
+
+	output := buf.String()
+	if strings.Contains(output, "should not appear") {
+		t.Error("debug messages should be filtered")
+	}
+	if !strings.Contains(output, "should appear") {
+		t.Error("warn message should be present")
+	}
+}
+
+// --- "off" disabling tests ---
+
+func TestNewLogger_ConsoleOff(t *testing.T) {
+	// ConsoleFormat "off" disables console output; file output still works.
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "console-off.log")
+	cfg := LogConfig{
+		ConsoleLevel:  "debug",
+		ConsoleFormat: "off",
+		LogFilePath:   logFile,
+	}
+	logger, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("NewLogger with console off failed: %v", err)
+	}
+	defer logger.Close()
+	logger.Info("console off, file on")
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(data), "console off, file on") {
+		t.Errorf("file should contain message despite console off, got: %s", string(data))
+	}
+}
+
+func TestNewLogger_FileOff(t *testing.T) {
+	// LogFileFormat "off" disables file output even with a non-empty path.
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "file-off.log")
+	cfg := LogConfig{
+		ConsoleLevel:  "debug",
+		ConsoleFormat: "off", // avoid console noise
+		LogFileFormat: "off",
+		LogFilePath:   logFile,
+	}
+	logger, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("NewLogger with file off failed: %v", err)
+	}
+	defer logger.Close()
+	logger.Info("should not hit the file")
+
+	if _, err := os.Stat(logFile); !os.IsNotExist(err) {
+		t.Errorf("log file should not exist when file format is off, got stat err: %v", err)
+	}
+}
+
+func TestNewLogger_AllOffSilent(t *testing.T) {
+	// All targets disabled: logger is silent, no error.
+	cfg := LogConfig{
+		ConsoleLevel:  "debug",
+		ConsoleFormat: "off",
+	}
+	logger, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("NewLogger with all targets off should succeed: %v", err)
+	}
+	defer logger.Close()
+	logger.Info("silently discarded")
+	logger.Debug("also silently discarded")
+	logger.Error("errors are discarded too")
+}
+
+// captureStdout redirects os.Stdout to a pipe, runs fn, and returns
+// everything written to stdout during fn.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout pipe: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout pipe: %v", err)
+	}
+	_ = r.Close()
+	return string(data)
+}
+
+// --- Merged format field regression tests ---
+
+func TestNewLogger_DefaultConsoleMask(t *testing.T) {
+	// Empty ConsoleFormat defaults to mask "LCM": level + caller + message.
+	out := captureStdout(t, func() {
+		logger, err := NewLogger(LogConfig{ConsoleLevel: "info"})
+		if err != nil {
+			t.Fatalf("NewLogger failed: %v", err)
+		}
+		defer logger.Close()
+		logger.Info("default mask output")
+	})
+
+	if !strings.Contains(out, "INFO") {
+		t.Errorf("mask output should contain level INFO, got: %q", out)
+	}
+	if !strings.Contains(out, "default mask output") {
+		t.Errorf("mask output should contain message, got: %q", out)
+	}
+	// Mask format must NOT look like text or json.
+	if strings.Contains(out, "level=INFO") {
+		t.Errorf("expected mask format, got text format: %q", out)
+	}
+	if strings.Contains(out, `"level":"INFO"`) {
+		t.Errorf("expected mask format, got json format: %q", out)
+	}
+}
+
+func TestNewLogger_DefaultFileFormatJSON(t *testing.T) {
+	// Empty LogFileFormat defaults to json in the file.
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "default.log")
+	cfg := LogConfig{
+		ConsoleLevel:  "info",
+		ConsoleFormat: "off", // avoid console noise
+		LogFilePath:   logFile,
+	}
+	logger, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("NewLogger failed: %v", err)
+	}
+	logger.Info("default file format")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("file should be valid JSON with empty LogFileFormat, got %q: %v", string(data), err)
+	}
+	if record["msg"] != "default file format" {
+		t.Errorf("expected msg='default file format', got %v", record["msg"])
+	}
+}
+
+func TestNewLogger_FormatCaseInsensitive(t *testing.T) {
+	// Uppercase format values behave identically to lowercase ones.
+
+	outJSON := captureStdout(t, func() {
+		logger, err := NewLogger(LogConfig{ConsoleLevel: "info", ConsoleFormat: "JSON"})
+		if err != nil {
+			t.Fatalf("NewLogger with JSON failed: %v", err)
+		}
+		defer logger.Close()
+		logger.Info("uppercase json")
+	})
+	if !strings.Contains(outJSON, `"msg":"uppercase json"`) {
+		t.Errorf("ConsoleFormat \"JSON\" should produce json output, got: %q", outJSON)
+	}
+
+	outText := captureStdout(t, func() {
+		logger, err := NewLogger(LogConfig{ConsoleLevel: "info", ConsoleFormat: "TEXT"})
+		if err != nil {
+			t.Fatalf("NewLogger with TEXT failed: %v", err)
+		}
+		defer logger.Close()
+		logger.Info("uppercase text")
+	})
+	if !strings.Contains(outText, "level=INFO") {
+		t.Errorf("ConsoleFormat \"TEXT\" should produce text output, got: %q", outText)
+	}
+
+	outOff := captureStdout(t, func() {
+		logger, err := NewLogger(LogConfig{ConsoleLevel: "info", ConsoleFormat: "OFF"})
+		if err != nil {
+			t.Fatalf("NewLogger with OFF failed: %v", err)
+		}
+		defer logger.Close()
+		logger.Info("uppercase off")
+	})
+	if outOff != "" {
+		t.Errorf("ConsoleFormat \"OFF\" should disable console, got output: %q", outOff)
+	}
+}
+
+func TestNewLogger_ConsoleMaskFormat(t *testing.T) {
+	// ConsoleFormat set to a mask string produces mask output on stdout.
+	out := captureStdout(t, func() {
+		logger, err := NewLogger(LogConfig{ConsoleLevel: "debug", ConsoleFormat: "TLCM"})
+		if err != nil {
+			t.Fatalf("NewLogger with mask format failed: %v", err)
+		}
+		defer logger.Close()
+		logger.Info("mask console test", "key", "val")
+	})
+
+	if !strings.Contains(out, "INFO") {
+		t.Errorf("mask output should contain level, got: %q", out)
+	}
+	if !strings.Contains(out, "mask console test") {
+		t.Errorf("mask output should contain message, got: %q", out)
+	}
+	if !strings.Contains(out, "key=val") {
+		t.Errorf("mask output should contain attributes, got: %q", out)
+	}
+	// Mask format must NOT look like text or json.
+	if strings.Contains(out, "level=INFO") {
+		t.Errorf("expected mask format, got text format: %q", out)
+	}
+	if strings.Contains(out, `"level":"INFO"`) {
+		t.Errorf("expected mask format, got json format: %q", out)
 	}
 }

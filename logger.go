@@ -13,24 +13,31 @@ import (
 // Logger wraps slog.Logger with configuration and lifecycle management.
 type Logger struct {
 	slog    *slog.Logger
-	config  Config
+	config  LogConfig
 	closers []io.Closer
 }
 
 // NewLogger creates a Logger from the given configuration.
-// Console output goes to stderr; file output (if configured) uses JSON with rotation.
-func NewLogger(config Config) (*Logger, error) {
-	level := parseLevel(config.Level)
+// Console output goes to stdout; file output (if configured) uses rotation.
+// A format value of "off" disables the corresponding target.
+// If every target is disabled, the logger silently discards all records.
+//
+// Console level comes from ConsoleLevel (empty defaults to "info");
+// file level comes from FileLevel (empty defaults to "debug").
+func NewLogger(config LogConfig) (*Logger, error) {
+	consoleLevel := parseLevel(config.ConsoleLevel)
+	fileLevel := parseFileLevel(config.FileLevel)
 	handlers := make([]slog.Handler, 0, 2)
 	var closers []io.Closer
 
-	// Console handler (stderr).
-	consoleHandler := newConsoleHandler(config.Format, level)
-	handlers = append(handlers, consoleHandler)
+	// Console handler (stdout).
+	if !isOff(config.ConsoleFormat) {
+		handlers = append(handlers, newConsoleHandler(config.ConsoleFormat, consoleLevel))
+	}
 
-	// File handler (JSON, with rotation).
-	if config.FilePath != "" {
-		fileHandler, closer, err := newFileHandler(config, level)
+	// File handler (with rotation).
+	if config.LogFilePath != "" && !isOff(config.LogFileFormat) {
+		fileHandler, closer, err := newFileHandler(config, fileLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -44,6 +51,11 @@ func NewLogger(config Config) (*Logger, error) {
 		config:  config,
 		closers: closers,
 	}, nil
+}
+
+// isOff reports whether a format value disables its output target.
+func isOff(v string) bool {
+	return strings.EqualFold(v, "off")
 }
 
 // Slog returns the underlying *slog.Logger for direct use.
@@ -102,9 +114,35 @@ func (l *Logger) Close() error {
 	return nil
 }
 
-// newConsoleHandler creates a stderr handler with the specified format and level.
+// newConsoleHandler creates a stdout handler for the given format.
+//   - "text" → slog text
+//   - "json" → slog json
+//   - "" → default mask "LCM"
+//   - otherwise → mask format (T/L/C/M field selection)
 func newConsoleHandler(format string, level slog.Level) slog.Handler {
-	opts := &slog.HandlerOptions{
+	return formatHandler(format, level, os.Stdout, "LCM")
+}
+
+// formatHandler builds a handler for the given output target.
+// defaultFormat is used when format is empty (e.g. "json" for files,
+// "LCM" mask for console).
+func formatHandler(format string, level slog.Level, w io.Writer, defaultFormat string) slog.Handler {
+	if format == "" {
+		format = defaultFormat
+	}
+	switch strings.ToLower(format) {
+	case "json":
+		return slog.NewJSONHandler(w, handlerOpts(level))
+	case "text":
+		return slog.NewTextHandler(w, handlerOpts(level))
+	default:
+		return newMaskHandler(format, level, w)
+	}
+}
+
+// handlerOpts returns standard HandlerOptions with source shortening.
+func handlerOpts(level slog.Level) *slog.HandlerOptions {
+	return &slog.HandlerOptions{
 		Level:     level,
 		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
@@ -116,39 +154,45 @@ func newConsoleHandler(format string, level slog.Level) slog.Handler {
 			return a
 		},
 	}
-	if strings.EqualFold(format, "json") {
-		return slog.NewJSONHandler(os.Stderr, opts)
-	}
-	return slog.NewTextHandler(os.Stderr, opts)
 }
 
 // newFileHandler creates a file handler with built-in rotation.
-// Format is "text" (human-readable) or "json" (structured).
-func newFileHandler(config Config, level slog.Level) (slog.Handler, io.Closer, error) {
-	if err := ensureDir(config.FilePath); err != nil {
+// LogFileFormat controls the output format (same options as console,
+// but empty defaults to "json").
+func newFileHandler(config LogConfig, level slog.Level) (slog.Handler, io.Closer, error) {
+	if err := ensureDir(config.LogFilePath); err != nil {
 		return nil, nil, fmt.Errorf("logging: create log dir: %w", err)
 	}
 	rotator := &Rotator{
-		Filename:   config.FilePath,
+		Filename:   config.LogFilePath,
 		MaxSize:    config.MaxSize,
 		MaxBackups: config.MaxBackups,
 		MaxAge:     config.MaxAge,
 		Compress:   config.Compress,
 	}
-	opts := &slog.HandlerOptions{Level: level, AddSource: true}
-	if strings.EqualFold(config.Format, "text") {
-		return slog.NewTextHandler(rotator, opts), rotator, nil
-	}
-	return slog.NewJSONHandler(rotator, opts), rotator, nil
+
+	return formatHandler(config.LogFileFormat, level, rotator, "json"), rotator, nil
 }
 
 // fanoutHandler returns a single handler that dispatches to multiple handlers.
+// An empty list yields a discard handler (all targets disabled).
 func fanoutHandler(handlers []slog.Handler) slog.Handler {
+	if len(handlers) == 0 {
+		return discardHandler{}
+	}
 	if len(handlers) == 1 {
 		return handlers[0]
 	}
 	return &multiHandler{handlers: handlers}
 }
+
+// discardHandler drops every log record; used when all targets are "off".
+type discardHandler struct{}
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (discardHandler) WithAttrs([]slog.Attr) slog.Handler        { return discardHandler{} }
+func (discardHandler) WithGroup(string) slog.Handler             { return discardHandler{} }
 
 // multiHandler dispatches log records to all underlying handlers.
 type multiHandler struct {
@@ -196,6 +240,7 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 }
 
 // parseLevel converts a level string to slog.Level.
+// An empty or unknown value defaults to slog.LevelInfo.
 func parseLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug":
@@ -207,6 +252,16 @@ func parseLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// parseFileLevel converts a file level string to slog.Level.
+// An empty value defaults to slog.LevelDebug; otherwise it
+// falls back to parseLevel semantics (info for unknown values).
+func parseFileLevel(level string) slog.Level {
+	if level == "" {
+		return slog.LevelDebug
+	}
+	return parseLevel(level)
 }
 
 // ensureDir creates the parent directory of a file path if it does not exist.

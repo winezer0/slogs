@@ -26,7 +26,7 @@ func defaultManager() *Manager {
 }
 
 // CreateLogger creates and registers a named logger.
-func CreateLogger(name string, config Config) (*Logger, error) {
+func CreateLogger(name string, config LogConfig) (*Logger, error) {
 	return defaultManager().Create(name, config)
 }
 
@@ -47,7 +47,7 @@ func CloseAll() error {
 }
 
 // Create creates and registers a named logger.
-func (m *Manager) Create(name string, config Config) (*Logger, error) {
+func (m *Manager) Create(name string, config LogConfig) (*Logger, error) {
 	if name == "" {
 		return nil, fmt.Errorf("logging: logger name cannot be empty")
 	}
