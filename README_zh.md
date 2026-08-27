@@ -62,6 +62,10 @@ defer logger.Close()
 // 结构化属性
 reqLogger := logger.With("request_id", "abc-123")
 reqLogger.Info("processing request", "method", "GET", "path", "/api/scan")
+
+// Context 日志会把调用方 context 传递给 slog Handler
+reqLogger.InfoContext(ctx, "request completed", "status", 200)
+reqLogger.LogAttrs(ctx, slog.LevelDebug, "request details", slog.String("path", "/api/scan"))
 ```
 
 ### 命名日志器（多模块隔离）
@@ -84,6 +88,8 @@ slogs.CloseAll()
 logger := slogs.Default()
 slogLogger := logger.Slog() // *slog.Logger，可直接传递给 eino 等框架
 ```
+
+实例 logger 同时提供 `DebugContext`、`InfoContext`、`WarnContext`、`ErrorContext`、`Log` 和 `LogAttrs`，参数语义与标准库 `slog.Logger` 一致。组合根可以继续使用 `Slog()` 传给只接受标准库 logger 的业务包。
 
 ## 配置说明
 

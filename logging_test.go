@@ -12,6 +12,64 @@ import (
 	"testing"
 )
 
+type contextCaptureHandler struct {
+	ctx context.Context
+}
+
+func (h *contextCaptureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *contextCaptureHandler) Handle(ctx context.Context, _ slog.Record) error {
+	h.ctx = ctx
+	return nil
+}
+func (h *contextCaptureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *contextCaptureHandler) WithGroup(string) slog.Handler      { return h }
+
+type countingCloser struct {
+	count int
+}
+
+func (c *countingCloser) Close() error {
+	c.count++
+	return nil
+}
+
+type contextKey string
+
+func TestLogger_ContextMethodsForwardContext(t *testing.T) {
+	handler := &contextCaptureHandler{}
+	logger := &Logger{slog: slog.New(handler)}
+	ctx := context.WithValue(context.Background(), contextKey("request_id"), "req-1")
+
+	logger.InfoContext(ctx, "context info")
+	if handler.ctx == nil || handler.ctx.Value(contextKey("request_id")) != "req-1" {
+		t.Fatal("InfoContext did not forward the caller context")
+	}
+	logger.Log(ctx, slog.LevelWarn, "context warning")
+	if handler.ctx == nil || handler.ctx.Value(contextKey("request_id")) != "req-1" {
+		t.Fatal("Log did not forward the caller context")
+	}
+	logger.LogAttrs(ctx, slog.LevelError, "context error", slog.String("component", "test"))
+	if handler.ctx == nil || handler.ctx.Value(contextKey("request_id")) != "req-1" {
+		t.Fatal("LogAttrs did not forward the caller context")
+	}
+}
+
+func TestLoggerWithSharesCloseLifecycle(t *testing.T) {
+	closer := &countingCloser{}
+	root := &Logger{slog: slog.New(discardHandler{}), lifecycle: &loggerLifecycle{closers: []io.Closer{closer}}}
+	child := root.With("component", "child")
+
+	if err := child.Close(); err != nil {
+		t.Fatalf("child close: %v", err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatalf("root close: %v", err)
+	}
+	if closer.count != 1 {
+		t.Fatalf("shared logger lifecycle closed %d times, want 1", closer.count)
+	}
+}
+
 // --- Config tests ---
 
 func TestDefaultConfig(t *testing.T) {

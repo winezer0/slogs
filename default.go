@@ -1,7 +1,9 @@
 package slogs
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 )
@@ -88,10 +90,24 @@ func Debug(msg string, args ...any) {
 	}
 }
 
+// DebugContext logs at debug level using the default logger and context.
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.DebugContext(ctx, msg, args...)
+	}
+}
+
 // Info logs at info level using the default logger.
 func Info(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
 		l.Info(msg, args...)
+	}
+}
+
+// InfoContext logs at info level using the default logger and context.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.InfoContext(ctx, msg, args...)
 	}
 }
 
@@ -102,10 +118,38 @@ func Warn(msg string, args ...any) {
 	}
 }
 
+// WarnContext logs at warn level using the default logger and context.
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.WarnContext(ctx, msg, args...)
+	}
+}
+
 // Error logs at error level using the default logger.
 func Error(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
 		l.Error(msg, args...)
+	}
+}
+
+// ErrorContext logs at error level using the default logger and context.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.ErrorContext(ctx, msg, args...)
+	}
+}
+
+// LogContext logs at the supplied level using the default logger and context.
+func LogContext(ctx context.Context, level slog.Level, msg string, args ...any) {
+	if l := ensureDefault(); l != nil {
+		l.Log(ctx, level, msg, args...)
+	}
+}
+
+// LogAttrs logs pre-built attributes at the supplied level using the default logger.
+func LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	if l := ensureDefault(); l != nil {
+		l.LogAttrs(ctx, level, msg, attrs...)
 	}
 }
 

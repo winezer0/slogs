@@ -2,19 +2,28 @@ package slogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Logger wraps slog.Logger with configuration and lifecycle management.
 type Logger struct {
-	slog    *slog.Logger
-	config  LogConfig
+	slog      *slog.Logger
+	config    LogConfig
+	lifecycle *loggerLifecycle
+}
+
+// loggerLifecycle owns resources shared by a root logger and its With views.
+type loggerLifecycle struct {
 	closers []io.Closer
+	once    sync.Once
+	err     error
 }
 
 // NewLogger creates a Logger from the given configuration.
@@ -47,9 +56,9 @@ func NewLogger(config LogConfig) (*Logger, error) {
 
 	handler := fanoutHandler(handlers)
 	return &Logger{
-		slog:    slog.New(handler),
-		config:  config,
-		closers: closers,
+		slog:      slog.New(handler),
+		config:    config,
+		lifecycle: &loggerLifecycle{closers: closers},
 	}, nil
 }
 
@@ -65,20 +74,55 @@ func (l *Logger) Slog() *slog.Logger {
 
 // With returns a Logger with the given attributes attached.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{slog: l.slog.With(args...), config: l.config, closers: l.closers}
+	return &Logger{slog: l.slog.With(args...), config: l.config, lifecycle: l.lifecycle}
+}
+
+// Enabled reports whether any configured output accepts the level.
+func (l *Logger) Enabled(ctx context.Context, level slog.Level) bool {
+	return l.slog.Enabled(ctx, level)
+}
+
+// Log records a message at the supplied level.
+func (l *Logger) Log(ctx context.Context, level slog.Level, msg string, args ...any) {
+	l.slog.Log(ctx, level, msg, args...)
+}
+
+// LogAttrs records a message with pre-built attributes at the supplied level.
+func (l *Logger) LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	l.slog.LogAttrs(ctx, level, msg, attrs...)
 }
 
 // Debug logs at debug level.
 func (l *Logger) Debug(msg string, args ...any) { l.slog.Debug(msg, args...) }
 
+// DebugContext logs at debug level with the supplied context.
+func (l *Logger) DebugContext(ctx context.Context, msg string, args ...any) {
+	l.slog.DebugContext(ctx, msg, args...)
+}
+
 // Info logs at info level.
 func (l *Logger) Info(msg string, args ...any) { l.slog.Info(msg, args...) }
+
+// InfoContext logs at info level with the supplied context.
+func (l *Logger) InfoContext(ctx context.Context, msg string, args ...any) {
+	l.slog.InfoContext(ctx, msg, args...)
+}
 
 // Warn logs at warn level.
 func (l *Logger) Warn(msg string, args ...any) { l.slog.Warn(msg, args...) }
 
+// WarnContext logs at warn level with the supplied context.
+func (l *Logger) WarnContext(ctx context.Context, msg string, args ...any) {
+	l.slog.WarnContext(ctx, msg, args...)
+}
+
 // Error logs at error level.
 func (l *Logger) Error(msg string, args ...any) { l.slog.Error(msg, args...) }
+
+// ErrorContext logs at error level with the supplied context.
+func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
+	l.slog.ErrorContext(ctx, msg, args...)
+}
 
 // Debugf logs a formatted message at debug level.
 func (l *Logger) Debugf(template string, args ...any) {
@@ -102,16 +146,19 @@ func (l *Logger) Errorf(template string, args ...any) {
 
 // Close flushes and releases file resources.
 func (l *Logger) Close() error {
-	var errs []error
-	for _, c := range l.closers {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
+	if l == nil || l.lifecycle == nil {
+		return nil
+	}
+	l.lifecycle.once.Do(func() {
+		var errs []error
+		for _, c := range l.lifecycle.closers {
+			if err := c.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("logging close: %v", errs)
-	}
-	return nil
+		l.lifecycle.err = errors.Join(errs...)
+	})
+	return l.lifecycle.err
 }
 
 // newConsoleHandler creates a stdout handler for the given format.

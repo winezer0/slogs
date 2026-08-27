@@ -62,6 +62,10 @@ defer logger.Close()
 // Structured attributes
 reqLogger := logger.With("request_id", "abc-123")
 reqLogger.Info("processing request", "method", "GET", "path", "/api/scan")
+
+// Context-aware methods forward ctx to the underlying slog.Handler.
+reqLogger.InfoContext(ctx, "request completed", "status", 200)
+reqLogger.LogAttrs(ctx, slog.LevelDebug, "request details", slog.String("path", "/api/scan"))
 ```
 
 ### Named Loggers (Multi-module Isolation)
@@ -84,6 +88,8 @@ slogs.CloseAll()
 logger := slogs.Default()
 slogLogger := logger.Slog() // *slog.Logger, can be passed to frameworks like eino
 ```
+
+The instance logger also exposes `DebugContext`, `InfoContext`, `WarnContext`, `ErrorContext`, `Log`, and `LogAttrs` with the same calling conventions as the standard library `slog.Logger`. Use `Slog()` when a business package explicitly depends on the standard logger interface.
 
 ## Configuration
 
