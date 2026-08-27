@@ -41,7 +41,7 @@ func NewLogger(config LogConfig) (*Logger, error) {
 
 	// Console handler (stdout).
 	if !isOff(config.ConsoleFormat) {
-		handlers = append(handlers, newConsoleHandler(config.ConsoleFormat, consoleLevel))
+		handlers = append(handlers, targetHandler{name: "console", next: newConsoleHandler(config.ConsoleFormat, consoleLevel)})
 	}
 
 	// File handler (with rotation).
@@ -50,7 +50,7 @@ func NewLogger(config LogConfig) (*Logger, error) {
 		if err != nil {
 			return nil, err
 		}
-		handlers = append(handlers, fileHandler)
+		handlers = append(handlers, targetHandler{name: "file", next: fileHandler})
 		closers = append(closers, closer)
 	}
 
@@ -210,6 +210,13 @@ func newFileHandler(config LogConfig, level slog.Level) (slog.Handler, io.Closer
 	if err := ensureDir(config.LogFilePath); err != nil {
 		return nil, nil, fmt.Errorf("logging: create log dir: %w", err)
 	}
+	probe, err := os.OpenFile(config.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, fmt.Errorf("logging: open log file: %w", err)
+	}
+	if err := probe.Close(); err != nil {
+		return nil, nil, fmt.Errorf("logging: close log file probe: %w", err)
+	}
 	rotator := &Rotator{
 		Filename:   config.LogFilePath,
 		MaxSize:    config.MaxSize,
@@ -241,6 +248,35 @@ func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
 func (discardHandler) WithAttrs([]slog.Attr) slog.Handler        { return discardHandler{} }
 func (discardHandler) WithGroup(string) slog.Handler             { return discardHandler{} }
 
+// targetHandler adds a stable output target to handler failures.
+type targetHandler struct {
+	name string
+	next slog.Handler
+}
+
+// Enabled reports whether the target accepts the supplied level.
+func (h targetHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.next.Enabled(ctx, level)
+}
+
+// Handle writes one record and identifies the target on failure.
+func (h targetHandler) Handle(ctx context.Context, record slog.Record) error {
+	if err := h.next.Handle(ctx, record); err != nil {
+		return fmt.Errorf("logging: %s target: %w", h.name, err)
+	}
+	return nil
+}
+
+// WithAttrs returns a target handler with the supplied attributes.
+func (h targetHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return targetHandler{name: h.name, next: h.next.WithAttrs(attrs)}
+}
+
+// WithGroup returns a target handler with the supplied group.
+func (h targetHandler) WithGroup(name string) slog.Handler {
+	return targetHandler{name: h.name, next: h.next.WithGroup(name)}
+}
+
 // multiHandler dispatches log records to all underlying handlers.
 type multiHandler struct {
 	handlers []slog.Handler
@@ -258,14 +294,15 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 // Handle dispatches the record to all enabled handlers.
 func (m *multiHandler) Handle(ctx context.Context, record slog.Record) error {
+	var errs []error
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, record.Level) {
 			if err := h.Handle(ctx, record); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // WithAttrs returns a new multiHandler with attributes added to all handlers.

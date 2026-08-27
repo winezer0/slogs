@@ -70,6 +70,21 @@ func TestLoggerWithSharesCloseLifecycle(t *testing.T) {
 	}
 }
 
+func TestNewLoggerRejectsUnopenableLogFile(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger, err := NewLogger(LogConfig{
+		ConsoleFormat: "off", LogFileFormat: "json",
+		LogFilePath: filepath.Join(parent, "runtime.jsonl"),
+	})
+	if err == nil {
+		_ = logger.Close()
+		t.Fatal("NewLogger() error = nil")
+	}
+}
+
 // --- Config tests ---
 
 func TestDefaultConfig(t *testing.T) {

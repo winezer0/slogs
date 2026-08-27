@@ -64,6 +64,10 @@ type Rotator struct {
 
 	millCh    chan bool
 	startMill sync.Once
+	millWG    sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
+	closed    bool
 }
 
 var (
@@ -75,6 +79,9 @@ var (
 
 	// megabyte is the conversion factor between MaxSize and bytes.
 	megabyte = 1024 * 1024
+
+	// errRotatorClosed reports writes and rotations attempted after Close.
+	errRotatorClosed = errors.New("logging: rotator is closed")
 )
 
 // Write implements io.Writer. If a write would cause the log file to exceed
@@ -82,6 +89,9 @@ var (
 func (r *Rotator) Write(p []byte) (n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return 0, errRotatorClosed
+	}
 
 	writeLen := int64(len(p))
 	if writeLen > r.max() {
@@ -109,9 +119,17 @@ func (r *Rotator) Write(p []byte) (n int, err error) {
 
 // Close implements io.Closer, and closes the current logfile.
 func (r *Rotator) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.close()
+	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		r.closeErr = r.close()
+		if r.millCh != nil {
+			close(r.millCh)
+		}
+		r.mu.Unlock()
+		r.millWG.Wait()
+	})
+	return r.closeErr
 }
 
 // close closes the file if it is open.
@@ -130,6 +148,9 @@ func (r *Rotator) close() error {
 func (r *Rotator) Rotate() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return errRotatorClosed
+	}
 	return r.rotate()
 }
 
@@ -225,94 +246,6 @@ func (r *Rotator) filename() string {
 	}
 	name := filepath.Base(os.Args[0]) + "-slogs.log"
 	return filepath.Join(os.TempDir(), name)
-}
-
-// millRunOnce performs compression and removal of stale log files.
-func (r *Rotator) millRunOnce() error {
-	if r.MaxBackups == 0 && r.MaxAge == 0 && !r.Compress {
-		return nil
-	}
-
-	files, err := r.oldLogFiles()
-	if err != nil {
-		return err
-	}
-
-	var compress, remove []logInfo
-
-	if r.MaxBackups > 0 && r.MaxBackups < len(files) {
-		preserved := make(map[string]bool)
-		var remaining []logInfo
-		for _, f := range files {
-			fn := f.Name()
-			if strings.HasSuffix(fn, compressSuffix) {
-				fn = fn[:len(fn)-len(compressSuffix)]
-			}
-			preserved[fn] = true
-			if len(preserved) > r.MaxBackups {
-				remove = append(remove, f)
-			} else {
-				remaining = append(remaining, f)
-			}
-		}
-		files = remaining
-	}
-
-	if r.MaxAge > 0 {
-		diff := time.Duration(int64(24*time.Hour) * int64(r.MaxAge))
-		cutoff := currentTime().Add(-1 * diff)
-		var remaining []logInfo
-		for _, f := range files {
-			if f.timestamp.Before(cutoff) {
-				remove = append(remove, f)
-			} else {
-				remaining = append(remaining, f)
-			}
-		}
-		files = remaining
-	}
-
-	if r.Compress {
-		for _, f := range files {
-			if !strings.HasSuffix(f.Name(), compressSuffix) {
-				compress = append(compress, f)
-			}
-		}
-	}
-
-	for _, f := range remove {
-		errRemove := os.Remove(filepath.Join(r.dir(), f.Name()))
-		if err == nil && errRemove != nil {
-			err = errRemove
-		}
-	}
-	for _, f := range compress {
-		fn := filepath.Join(r.dir(), f.Name())
-		errCompress := compressLogFile(fn, fn+compressSuffix)
-		if err == nil && errCompress != nil {
-			err = errCompress
-		}
-	}
-	return err
-}
-
-// millRun runs in a goroutine to manage post-rotation compression and removal.
-func (r *Rotator) millRun() {
-	for range r.millCh {
-		_ = r.millRunOnce()
-	}
-}
-
-// mill performs post-rotation processing, starting the mill goroutine if needed.
-func (r *Rotator) mill() {
-	r.startMill.Do(func() {
-		r.millCh = make(chan bool, 1)
-		go r.millRun()
-	})
-	select {
-	case r.millCh <- true:
-	default:
-	}
 }
 
 // oldLogFiles returns the list of backup log files sorted by timestamp (newest first).
