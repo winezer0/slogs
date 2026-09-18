@@ -77,6 +77,10 @@ var (
 	// osStat exists so it can be mocked out by tests.
 	osStat = os.Stat
 
+	// osRename exists so rotation failures can be exercised without relying on
+	// platform-specific file-lock behaviour.
+	osRename = os.Rename
+
 	// megabyte is the conversion factor between MaxSize and bytes.
 	megabyte = 1024 * 1024
 
@@ -180,8 +184,18 @@ func (r *Rotator) openNew() error {
 	if err == nil {
 		mode = info.Mode()
 		newname := backupName(name, r.LocalTime)
-		if err := os.Rename(name, newname); err != nil {
-			return fmt.Errorf("can't rename log file: %s", err)
+		if err := osRename(name, newname); err != nil {
+			// On Windows another process may temporarily hold the active log
+			// open. Keep logging by appending to it and defer rotation until
+			// another max-sized batch has been written. Returning the rename
+			// error here makes every subsequent application log call fail.
+			f, appendErr := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, mode)
+			if appendErr != nil {
+				return fmt.Errorf("can't rename log file: %s (can't reopen for append: %v)", err, appendErr)
+			}
+			r.file = f
+			r.size = 0
+			return nil
 		}
 		if err := chown(name, info); err != nil {
 			return err

@@ -98,6 +98,37 @@ func TestRotator_Rotation(t *testing.T) {
 	}
 }
 
+func TestRotator_RenameFailureDefersRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "locked.log")
+	if err := os.WriteFile(logFile, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origMegabyte := megabyte
+	origRename := osRename
+	megabyte = 1
+	osRename = func(string, string) error { return fmt.Errorf("file is locked") }
+	defer func() {
+		megabyte = origMegabyte
+		osRename = origRename
+	}()
+
+	r := &Rotator{Filename: logFile, MaxSize: 1}
+	defer r.Close()
+	if _, err := r.Write([]byte("next\n")); err != nil {
+		t.Fatalf("Write should defer rotation when rename fails: %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "existing\nnext\n" {
+		t.Fatalf("log content = %q, want appended content", data)
+	}
+}
+
 func TestRotator_Close(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "close.log")
