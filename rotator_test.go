@@ -107,8 +107,12 @@ func TestRotator_RenameFailureDefersRotation(t *testing.T) {
 
 	origMegabyte := megabyte
 	origRename := osRename
-	megabyte = 1
-	osRename = func(string, string) error { return fmt.Errorf("file is locked") }
+	megabyte = 10
+	renameCalled := false
+	osRename = func(string, string) error {
+		renameCalled = true
+		return fmt.Errorf("file is locked")
+	}
 	defer func() {
 		megabyte = origMegabyte
 		osRename = origRename
@@ -118,6 +122,9 @@ func TestRotator_RenameFailureDefersRotation(t *testing.T) {
 	defer r.Close()
 	if _, err := r.Write([]byte("next\n")); err != nil {
 		t.Fatalf("Write should defer rotation when rename fails: %v", err)
+	}
+	if !renameCalled {
+		t.Fatal("Write did not attempt rotation")
 	}
 
 	data, err := os.ReadFile(logFile)
