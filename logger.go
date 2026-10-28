@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Logger wraps slog.Logger with configuration and lifecycle management.
@@ -84,64 +86,90 @@ func (l *Logger) Enabled(ctx context.Context, level slog.Level) bool {
 
 // Log records a message at the supplied level.
 func (l *Logger) Log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	l.slog.Log(ctx, level, msg, args...)
+	l.log(ctx, level, msg, args, nil)
 }
 
 // LogAttrs records a message with pre-built attributes at the supplied level.
 func (l *Logger) LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
-	l.slog.LogAttrs(ctx, level, msg, attrs...)
+	l.log(ctx, level, msg, nil, attrs)
 }
 
 // Debug logs at debug level.
-func (l *Logger) Debug(msg string, args ...any) { l.slog.Debug(msg, args...) }
+func (l *Logger) Debug(msg string, args ...any) {
+	l.log(context.Background(), slog.LevelDebug, msg, args, nil)
+}
 
 // DebugContext logs at debug level with the supplied context.
 func (l *Logger) DebugContext(ctx context.Context, msg string, args ...any) {
-	l.slog.DebugContext(ctx, msg, args...)
+	l.log(ctx, slog.LevelDebug, msg, args, nil)
 }
 
 // Info logs at info level.
-func (l *Logger) Info(msg string, args ...any) { l.slog.Info(msg, args...) }
+func (l *Logger) Info(msg string, args ...any) {
+	l.log(context.Background(), slog.LevelInfo, msg, args, nil)
+}
 
 // InfoContext logs at info level with the supplied context.
 func (l *Logger) InfoContext(ctx context.Context, msg string, args ...any) {
-	l.slog.InfoContext(ctx, msg, args...)
+	l.log(ctx, slog.LevelInfo, msg, args, nil)
 }
 
 // Warn logs at warn level.
-func (l *Logger) Warn(msg string, args ...any) { l.slog.Warn(msg, args...) }
+func (l *Logger) Warn(msg string, args ...any) {
+	l.log(context.Background(), slog.LevelWarn, msg, args, nil)
+}
 
 // WarnContext logs at warn level with the supplied context.
 func (l *Logger) WarnContext(ctx context.Context, msg string, args ...any) {
-	l.slog.WarnContext(ctx, msg, args...)
+	l.log(ctx, slog.LevelWarn, msg, args, nil)
 }
 
 // Error logs at error level.
-func (l *Logger) Error(msg string, args ...any) { l.slog.Error(msg, args...) }
+func (l *Logger) Error(msg string, args ...any) {
+	l.log(context.Background(), slog.LevelError, msg, args, nil)
+}
 
 // ErrorContext logs at error level with the supplied context.
 func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
-	l.slog.ErrorContext(ctx, msg, args...)
+	l.log(ctx, slog.LevelError, msg, args, nil)
 }
 
 // Debugf logs a formatted message at debug level.
 func (l *Logger) Debugf(template string, args ...any) {
-	l.slog.Debug(fmt.Sprintf(template, args...))
+	l.log(context.Background(), slog.LevelDebug, fmt.Sprintf(template, args...), nil, nil)
 }
 
 // Infof logs a formatted message at info level.
 func (l *Logger) Infof(template string, args ...any) {
-	l.slog.Info(fmt.Sprintf(template, args...))
+	l.log(context.Background(), slog.LevelInfo, fmt.Sprintf(template, args...), nil, nil)
 }
 
 // Warnf logs a formatted message at warn level.
 func (l *Logger) Warnf(template string, args ...any) {
-	l.slog.Warn(fmt.Sprintf(template, args...))
+	l.log(context.Background(), slog.LevelWarn, fmt.Sprintf(template, args...), nil, nil)
 }
 
 // Errorf logs a formatted message at error level.
 func (l *Logger) Errorf(template string, args ...any) {
-	l.slog.Error(fmt.Sprintf(template, args...))
+	l.log(context.Background(), slog.LevelError, fmt.Sprintf(template, args...), nil, nil)
+}
+
+// log is called directly by each public entry point so the same stack depth
+// identifies the user call for both Logger methods and package functions.
+func (l *Logger) log(ctx context.Context, level slog.Level, msg string, args []any, attrs []slog.Attr) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	handler := l.slog.Handler()
+	if !handler.Enabled(ctx, level) {
+		return
+	}
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:])
+	record := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	record.Add(args...)
+	record.AddAttrs(attrs...)
+	_ = handler.Handle(ctx, record)
 }
 
 // Close flushes and releases file resources.

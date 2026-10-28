@@ -86,97 +86,97 @@ func closeDefault() error {
 // Debug logs at debug level using the default logger.
 func Debug(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Debug(msg, args...)
+		l.log(context.Background(), slog.LevelDebug, msg, args, nil)
 	}
 }
 
 // DebugContext logs at debug level using the default logger and context.
 func DebugContext(ctx context.Context, msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.DebugContext(ctx, msg, args...)
+		l.log(ctx, slog.LevelDebug, msg, args, nil)
 	}
 }
 
 // Info logs at info level using the default logger.
 func Info(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Info(msg, args...)
+		l.log(context.Background(), slog.LevelInfo, msg, args, nil)
 	}
 }
 
 // InfoContext logs at info level using the default logger and context.
 func InfoContext(ctx context.Context, msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.InfoContext(ctx, msg, args...)
+		l.log(ctx, slog.LevelInfo, msg, args, nil)
 	}
 }
 
 // Warn logs at warn level using the default logger.
 func Warn(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Warn(msg, args...)
+		l.log(context.Background(), slog.LevelWarn, msg, args, nil)
 	}
 }
 
 // WarnContext logs at warn level using the default logger and context.
 func WarnContext(ctx context.Context, msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.WarnContext(ctx, msg, args...)
+		l.log(ctx, slog.LevelWarn, msg, args, nil)
 	}
 }
 
 // Error logs at error level using the default logger.
 func Error(msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Error(msg, args...)
+		l.log(context.Background(), slog.LevelError, msg, args, nil)
 	}
 }
 
 // ErrorContext logs at error level using the default logger and context.
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.ErrorContext(ctx, msg, args...)
+		l.log(ctx, slog.LevelError, msg, args, nil)
 	}
 }
 
 // LogContext logs at the supplied level using the default logger and context.
 func LogContext(ctx context.Context, level slog.Level, msg string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Log(ctx, level, msg, args...)
+		l.log(ctx, level, msg, args, nil)
 	}
 }
 
 // LogAttrs logs pre-built attributes at the supplied level using the default logger.
 func LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	if l := ensureDefault(); l != nil {
-		l.LogAttrs(ctx, level, msg, attrs...)
+		l.log(ctx, level, msg, nil, attrs)
 	}
 }
 
 // Debugf logs a formatted message at debug level using the default logger.
 func Debugf(template string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Debugf(template, args...)
+		l.log(context.Background(), slog.LevelDebug, fmt.Sprintf(template, args...), nil, nil)
 	}
 }
 
 // Infof logs a formatted message at info level using the default logger.
 func Infof(template string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Infof(template, args...)
+		l.log(context.Background(), slog.LevelInfo, fmt.Sprintf(template, args...), nil, nil)
 	}
 }
 
 // Warnf logs a formatted message at warn level using the default logger.
 func Warnf(template string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Warnf(template, args...)
+		l.log(context.Background(), slog.LevelWarn, fmt.Sprintf(template, args...), nil, nil)
 	}
 }
 
 // Errorf logs a formatted message at error level using the default logger.
 func Errorf(template string, args ...any) {
 	if l := ensureDefault(); l != nil {
-		l.Errorf(template, args...)
+		l.log(context.Background(), slog.LevelError, fmt.Sprintf(template, args...), nil, nil)
 	}
 }
