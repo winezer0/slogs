@@ -63,6 +63,7 @@
 //   - MaxSize: max megabytes per file before rotation (default 100).
 //   - MaxBackups: max old files to retain (default 3).
 //   - MaxAge: max days to retain old files (default 30).
+//   - LocalTime: use local time in rotated filenames (default false, UTC).
 //   - Compress: gzip-compress rotated files (default true).
 //
 // Console and file levels are independent: set ConsoleLevel to "info" for a

@@ -103,6 +103,7 @@ logging:
   max_size: 100         # max megabytes per file before rotation
   max_backups: 3        # max number of old files to retain
   max_age: 30           # max days to retain old files
+  localtime: false      # local time in rotated filenames; false keeps UTC
   compress: true        # gzip compress rotated files
 ```
 
@@ -116,6 +117,7 @@ logging:
 | `MaxSize` | int | `100` | Max MB per file before rotation |
 | `MaxBackups` | int | `3` | Max old files to retain |
 | `MaxAge` | int | `30` | Max days to retain old files |
+| `LocalTime` | bool | `false` | Use local time in rotated filenames; does not change record timestamps |
 | `Compress` | bool | `true` | Gzip compress rotated files |
 
 > Console and file levels are independent. For example, `ConsoleLevel: "info"` with an empty `FileLevel` (defaults to `"debug"`) keeps the console quiet while files capture debug logs.

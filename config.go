@@ -28,6 +28,8 @@ type LogConfig struct {
 	MaxBackups int `yaml:"max_backups"`
 	// MaxAge is the maximum number of days to retain old log files.
 	MaxAge int `yaml:"max_age"`
+	// LocalTime uses local time in rotated filenames; false preserves UTC naming.
+	LocalTime bool `yaml:"localtime"`
 	// Compress determines whether rotated files are compressed.
 	Compress bool `yaml:"compress"`
 }

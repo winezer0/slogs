@@ -250,6 +250,7 @@ func newFileHandler(config LogConfig, level slog.Level) (slog.Handler, io.Closer
 		MaxSize:    config.MaxSize,
 		MaxBackups: config.MaxBackups,
 		MaxAge:     config.MaxAge,
+		LocalTime:  config.LocalTime,
 		Compress:   config.Compress,
 	}
 
