@@ -14,6 +14,72 @@
 - **全局默认** — 懒初始化 + 包级便捷函数，开箱即用
 - **并发安全** — 所有导出类型和函数均可安全并发使用
 
+## 自定义标准 Handler
+
+`NewLogger(config, handlers...)` 可追加数据库等自定义 `slog.Handler`，复用现有分发器；各 Handler 自行控制日志级别，关闭控制台或文件输出不会关闭自定义目标。
+
+```go
+logger, err := slogs.NewLogger(config, taskHandler)
+if err != nil {
+    return err
+}
+defer logger.Close()
+logger.Slog().InfoContext(ctx, "task started", "task_id", taskID)
+```
+
+传入的 Handler 由调用方管理生命周期，`Close` 不负责关闭它们；不允许传入 nil。分发器会尝试所有已启用目标，并返回聚合错误。标准 `slog.Logger` 会丢弃 Handler 返回的错误，持久化目标应自行记录失败状态或提供错误回调，避免静默丢失日志。
+
+## 可选异步 Handler
+
+只包装数据库等慢目标，控制台和文件保持现有同步行为：
+
+```go
+async, err := slogs.NewAsyncHandler(databaseHandler, slogs.AsyncOptions{
+    QueueSize:     1024,
+    WriteTimeout:  5 * time.Second,
+    BatchSize:     100,
+    BatchInterval: 10 * time.Millisecond,
+    OnError:       func(err error) { /* 使用其他渠道报告错误 */ },
+})
+if err != nil {
+    return err
+}
+logger, err := slogs.NewLogger(config, async)
+if err != nil {
+    _ = async.Close(context.Background())
+    return err
+}
+// 使用 logger，退出时先停止产生新日志，再排空异步队列。
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := async.Close(ctx); err != nil {
+    // 等待超时后后台仍继续排空，保持数据库开启并再次调用 Close 等待。
+    return err
+}
+// 数据库仍由调用方管理，此时可关闭；Logger.Close 只关闭库自有文件资源。
+_ = logger.Close()
+```
+
+零值配置默认排队 1024 条、写入超时 5 秒、逐条消费。队列满时丢弃**新日志**并返回 `ErrAsyncQueueFull`，关闭后的直接调用返回 `ErrAsyncClosed`。常规日志方法会忽略这些返回错误，应通过 `Stats()` 查看丢弃、拒绝、写入失败、积压和批次计数。`OnError` 在消费者中每次写入或整批失败时调用一次，必须快速返回，不得通过同一包装器记录日志或调用其关闭方法。
+
+底层实现 `slogs.BatchHandler` 且配置 `BatchSize > 1` 时启用批量提交。`HandleBatch(ctx, []slogs.BatchRecord)` 须保证整批提交或回滚，遵守写入 context，返回后不得保留传入切片；每条记录的 `Context` 单独保留原始上下文值，移除原请求取消和截止时间。单消费者只合并连续且属于**同一派生实例**的记录，达到条数、等待时间（默认 10ms）、实例切换或关闭时提交。派生实例未保留批量接口时退回逐条写入。批次失败按整批条数和一次失败批次计数，不重试、不回退逐条写入。独立 `perf` 模块提供 GORM/SQLite 事务适配，主库不依赖 GORM。
+
+入队及绑定属性前解析 `LogValuer` 并复制属性、分组结构；`Any` 中 map、slice、指针保持原类型和引用，调用方之后不得修改。容量限制的是排队条数，不包含消费者持有的批次、预读记录，也不是字节上限。请求取消不影响已接收日志，底层须配合独立写入超时。派生实例共享队列、统计和关闭状态。`Close(ctx)` 停止接收并排空，完成后返回首次写入错误；context 仅限制本次等待，不取消后台排空。包装器不会关闭底层 handler 或数据库，队列丢弃通过统计体现，不作为关闭错误返回。
+
+### 数据库配置建议与短测
+
+支持批量接口的数据库 handler 可从 `BatchSize: 100`、`BatchInterval: 10*time.Millisecond`、`QueueSize: 1024`、`WriteTimeout: 5*time.Second` 开始。这些是配置起点，不是生产容量保证；库的零值配置仍然**逐条写入**。队列容量应结合允许的突发量及排空时间确定，持续溢出需要降低输入量或提高数据库处理能力。尽量复用派生 logger，频繁切换实例会拆散批次，应同时关注平均批次大小和丢弃、失败计数。SQLite 两种 journal/synchronous 配置的持久性语义不同。
+
+独立 `perf` 模块默认运行短时数据库矩阵：1KiB 负载、1／16 并发、预热 1 秒、测量 5 秒、重复三次。在 `perf` 目录执行，需启用 CGO 并安装 C 编译器：
+
+```powershell
+$env:CGO_ENABLED = "1"
+go run . -targets db-delete,async-delete,batch-delete,db-wal,async-wal,batch-wal
+go run . -targets batch-delete,batch-wal -workers 16 -rate 1000
+```
+
+`db-*` 为同步逐条、`async-*` 为异步逐条、`batch-*` 为异步批量。可通过 `-queue-size`、`-batch-size`、`-batch-interval`、`-write-timeout` 调整参数。`-rate` 限制每秒总调用尝试数，实际发送可能更低；零值刻意让生产者不限速，可能大量丢弃。预热使用独立包装器，完全排空并清除数据后才开始正式测量。输出分别报告调用延迟／速率、接收／写入／丢弃数量、丢弃率、测量期间近似完成写入数、**包含最终排空时间**的有效落库速率、平均批次大小、排空时间和数据库关闭时间。内存分配包含测量及排空阶段，按调用尝试数分摊。排空后校验“调用数＝接收＋丢弃＋拒绝”“接收＝成功＋失败”，并核对数据库行数等于成功写入数。高调用速率伴随丢弃不代表数据库吞吐提升；不限速结果包含生产者竞争，也不是数据库自身的独立容量极限。文件及轮转目标仍可显式选择，默认矩阵不包含它们。
+
 ## 安装
 
 ```bash

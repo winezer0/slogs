@@ -31,11 +31,18 @@ type loggerLifecycle struct {
 // NewLogger creates a Logger from the given configuration.
 // Console output goes to stdout; file output (if configured) uses rotation.
 // A format value of "off" disables the corresponding target.
-// If every target is disabled, the logger silently discards all records.
+// Additional handlers are caller-owned and keep their own level policies.
+// Close does not close additional handlers. Nil handlers are rejected.
+// If every target is disabled and no handlers are supplied, records are discarded.
 //
 // Console level comes from ConsoleLevel (empty defaults to "info");
 // file level comes from FileLevel (empty defaults to "debug").
-func NewLogger(config LogConfig) (*Logger, error) {
+func NewLogger(config LogConfig, additional ...slog.Handler) (*Logger, error) {
+	for i, handler := range additional {
+		if handler == nil {
+			return nil, fmt.Errorf("logging: additional handler %d is nil", i)
+		}
+	}
 	consoleLevel := parseLevel(config.ConsoleLevel)
 	fileLevel := parseFileLevel(config.FileLevel)
 	handlers := make([]slog.Handler, 0, 2)
@@ -56,6 +63,9 @@ func NewLogger(config LogConfig) (*Logger, error) {
 		closers = append(closers, closer)
 	}
 
+	for i, handler := range additional {
+		handlers = append(handlers, targetHandler{name: fmt.Sprintf("custom[%d]", i), next: handler})
+	}
 	handler := fanoutHandler(handlers)
 	return &Logger{
 		slog:      slog.New(handler),
@@ -326,7 +336,7 @@ func (m *multiHandler) Handle(ctx context.Context, record slog.Record) error {
 	var errs []error
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, record.Level) {
-			if err := h.Handle(ctx, record); err != nil {
+			if err := h.Handle(ctx, record.Clone()); err != nil {
 				errs = append(errs, err)
 			}
 		}

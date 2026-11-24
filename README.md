@@ -14,6 +14,64 @@ A lightweight, zero-external-dependency unified logging package built on Go's st
 - **Global default** — Lazy initialization + package-level convenience functions, ready out of the box
 - **Thread-safe** — All exported types and functions are safe for concurrent use
 
+## Custom standard handlers
+
+`NewLogger(config, handlers...)` accepts additional caller-owned `slog.Handler` targets, including database adapters. Each target keeps its own level policy; disabling console/file output does not disable custom targets. Nil handlers are rejected. `Close` only closes resources opened by slogs.
+
+The fan-out attempts every enabled target and aggregates failures. Standard `slog.Logger` discards Handler errors, so durable handlers must retain failures or expose an error callback. Use `logger.Slog()` to inject the resulting standard logger into business code.
+
+## Optional asynchronous handlers
+
+Wrap only the slow target; console/file outputs and existing callers stay synchronous.
+
+```go
+async, err := slogs.NewAsyncHandler(databaseHandler, slogs.AsyncOptions{
+    QueueSize:     1024,
+    WriteTimeout:  5 * time.Second,
+    BatchSize:     100,
+    BatchInterval: 10 * time.Millisecond,
+    OnError:       func(err error) { /* report outside this logger */ },
+})
+if err != nil {
+    return err
+}
+logger, err := slogs.NewLogger(config, async)
+if err != nil {
+    _ = async.Close(context.Background())
+    return err
+}
+// Use logger, then stop producers before shutting down.
+// logger.Close() closes only slogs-owned file resources.
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := async.Close(ctx); err != nil {
+    // On a wait timeout, keep the database open and call Close again to wait.
+    return err
+}
+// The database remains caller-owned; it can now be closed.
+_ = logger.Close()
+```
+
+Zero options default to 1024 queued records, a 5-second write timeout, and single writes. A full queue drops the **new** record (`ErrAsyncQueueFull`); direct calls after closing return `ErrAsyncClosed`. Normal logging discards these errors: monitor `Stats()` for drops, rejections, write failures, occupancy, and batch counters. `OnError` runs once per failed write/batch on the consumer; it must return promptly and must not log through or close the same wrapper.
+
+Targets implementing `slogs.BatchHandler` can opt into batching with `BatchSize > 1`. `HandleBatch(ctx, []slogs.BatchRecord)` must atomically commit or roll back the whole batch, honor the write context, and not retain the supplied slice. Each entry also carries its original context values without cancellation/deadlines. A single consumer batches only consecutive records from the **same derived handler instance**, flushing on size, interval (default 10ms), a view change, or shutdown. Derived targets that lose the batch interface fall back to single writes. Failed batches are counted by record and batch, with no retry or single-write fallback. The isolated `perf` module contains a GORM/SQLite transaction adapter; GORM is not a dependency of slogs.
+
+`LogValuer`s and attribute/group structures are snapshotted on the caller; referenced `Any` maps, slices and pointers are **not deep-copied** and must remain immutable after logging/binding. Queue capacity counts waiting records, not bytes or the consumer's current batch/lookahead. Request cancellation does not cancel accepted records; the target must honor its independent write timeout. All derived views share the queue, statistics and close state. `Close(ctx)` drains accepted records and returns the first write failure; its context only limits waiting. It never closes the underlying handler/database, and queue loss is reported through statistics rather than the close result.
+
+### Database configuration and short checks
+
+For a batch-capable database handler, start with `BatchSize: 100`, `BatchInterval: 10*time.Millisecond`, `QueueSize: 1024`, and `WriteTimeout: 5*time.Second`. These are starting settings, not a production capacity guarantee. The library's zero-value options still use **single writes**. Size the queue against tolerated bursts and drain time; sustained overflow needs lower input volume or more database write capacity. Reuse derived logger instances where possible: frequent view changes split batches, so monitor average batch length as well as drop/failure counters. The two SQLite journal/synchronous configurations have different durability semantics.
+
+The isolated `perf` module defaults to a short database-only matrix (1KiB payload, 1/16 producers, 1-second warmup, 5-second measurement, three repetitions). Run from `perf` with CGO enabled and a C compiler available:
+
+```powershell
+$env:CGO_ENABLED = "1"
+go run . -targets db-delete,async-delete,batch-delete,db-wal,async-wal,batch-wal
+go run . -targets batch-delete,batch-wal -workers 16 -rate 1000
+```
+
+`db-*` means synchronous single writes, `async-*` asynchronous single writes, and `batch-*` asynchronous batches. Options include `-queue-size`, `-batch-size`, `-batch-interval`, and `-write-timeout`. `-rate` caps aggregate attempted calls per second (actual delivery can be lower); zero deliberately saturates producers and may cause substantial loss. Warmup uses a separate drained wrapper and its rows are removed before measurement. Output separates call latency/rate, accepted/written/dropped counts, drop percentage, approximate writes completed during measurement, effective persisted rate **including final drain**, average batch length, drain time, and database close time. Allocations include measurement plus drain and are divided by attempted calls. After draining, the tool checks `calls = accepted + dropped + rejected`, `accepted = written + failed`, and database rows equal successful writes. A high call rate with drops is not database throughput; saturation results include producer contention and are not an isolated database capacity limit. File/rotation targets remain available explicitly and are not in the default matrix.
+
 ## Installation
 
 ```bash
