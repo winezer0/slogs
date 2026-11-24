@@ -80,6 +80,30 @@ go run . -targets batch-delete,batch-wal -workers 16 -rate 1000
 
 `db-*` 为同步逐条、`async-*` 为异步逐条、`batch-*` 为异步批量。可通过 `-queue-size`、`-batch-size`、`-batch-interval`、`-write-timeout` 调整参数。`-rate` 限制每秒总调用尝试数，实际发送可能更低；零值刻意让生产者不限速，可能大量丢弃。预热使用独立包装器，完全排空并清除数据后才开始正式测量。输出分别报告调用延迟／速率、接收／写入／丢弃数量、丢弃率、测量期间近似完成写入数、**包含最终排空时间**的有效落库速率、平均批次大小、排空时间和数据库关闭时间。内存分配包含测量及排空阶段，按调用尝试数分摊。排空后校验“调用数＝接收＋丢弃＋拒绝”“接收＝成功＋失败”，并核对数据库行数等于成功写入数。高调用速率伴随丢弃不代表数据库吞吐提升；不限速结果包含生产者竞争，也不是数据库自身的独立容量极限。文件及轮转目标仍可显式选择，默认矩阵不包含它们。
 
+### 完整回归、故障注入与预验收
+
+仓库包含两个 Go 模块，应启用 CGO，分别在根目录和 `perf` 目录执行 `go test -race ./... -count=1`。`perf` 回归包含 SQLite `SQLITE_FULL` 容量限制、至少持续两秒且反复失败的写锁、释放容量／锁后的恢复，以及未提交脏页已写入恢复文件时强杀子进程。强杀测试核对已提交数据保留、未提交事务回滚、数据库完整性及重启写入，并明确验证内存队列中的已接收记录会丢失；这不是断电测试。
+
+真实文件系统满测试仅限 Linux，需要 root 和 `unshare`。它只填满**独立挂载命名空间内的 8MiB tmpfs**，验证真实 `ENOSPC`，再释放空间并检查恢复。普通用户回归会跳过此项，Windows／Linux 仍执行 SQLite 页数上限测试。在 Linux 的 `perf` 目录执行：
+
+```sh
+CGO_ENABLED=1 go test -race -c -o /tmp/slogs-perf-acceptance.test .
+sudo /tmp/slogs-perf-acceptance.test -test.run TestAcceptanceFilesystemFull -test.v
+```
+
+持续运行测试默认跳过，需显式开启。在 Windows 的 `perf` 目录执行：
+
+```powershell
+$env:CGO_ENABLED = "1"
+$env:SLOGS_SOAK_DURATION = "10m"
+go test . -run TestAcceptanceSoak -count=1 -timeout=12m -v
+Remove-Item Env:SLOGS_SOAK_DURATION
+```
+
+Linux 使用 `CGO_ENABLED=1 SLOGS_SOAK_DURATION=10m go test . -run TestAcceptanceSoak -count=1 -timeout=12m -v`。两种 SQLite 配置各使用 16 个生产者，模拟每目标约 500 条／秒、每分钟前五秒约 5000 条／秒的突发，负载 1KiB，并包含请求取消和派生实例切换。每 30 秒采样 GC 后堆内存／对象数、进程 RSS／私有内存（包含原生分配）、goroutine、积压及写入／丢弃计数；排空后核对账目和数据库完整性。突发丢弃允许发生并如实报告，不算写入失败，也不冒充成功写入。
+
+预热后比较首尾各三个样本的中位数，增长阈值为 Go 堆 32MiB、RSS／私有内存各 128MiB、goroutine 八个。这些宽松边界仅用于预验收，不是不存在泄漏的证明。Windows 私有内存为私有提交量，Linux 为私有干净／脏页，绝对值不能直接跨系统对比。十分钟模拟不能替代数小时／数天稳定性，也不等于真实业务 handler 和负载验证。macOS 只验证纯 Go 主库 amd64／arm64 交叉编译，未验证运行行为或 CGO SQLite。
+
 ## 安装
 
 ```bash

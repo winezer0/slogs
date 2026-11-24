@@ -72,6 +72,30 @@ go run . -targets batch-delete,batch-wal -workers 16 -rate 1000
 
 `db-*` means synchronous single writes, `async-*` asynchronous single writes, and `batch-*` asynchronous batches. Options include `-queue-size`, `-batch-size`, `-batch-interval`, and `-write-timeout`. `-rate` caps aggregate attempted calls per second (actual delivery can be lower); zero deliberately saturates producers and may cause substantial loss. Warmup uses a separate drained wrapper and its rows are removed before measurement. Output separates call latency/rate, accepted/written/dropped counts, drop percentage, approximate writes completed during measurement, effective persisted rate **including final drain**, average batch length, drain time, and database close time. Allocations include measurement plus drain and are divided by attempted calls. After draining, the tool checks `calls = accepted + dropped + rejected`, `accepted = written + failed`, and database rows equal successful writes. A high call rate with drops is not database throughput; saturation results include producer contention and are not an isolated database capacity limit. File/rotation targets remain available explicitly and are not in the default matrix.
 
+### Regression, fault injection, and pre-acceptance soak
+
+The repository has two Go modules: run `go test -race ./... -count=1` in both the root and `perf` directories with CGO enabled. The `perf` regression suite includes SQLite `SQLITE_FULL` limits, a write lock held across repeated failures for at least two seconds, recovery after capacity/lock restoration, and actual subprocess termination with spilled uncommitted pages. Crash checks retain committed data, roll back the open transaction, verify database integrity/restart writes, and explicitly confirm that accepted in-memory records are lost on termination. These are process-crash tests, not power-loss tests.
+
+The real filesystem-full test is Linux-only and requires root plus `unshare`. It fills only an **8MiB tmpfs inside a private mount namespace**, verifies real `ENOSPC`, then frees space and checks database recovery. Unprivileged runs skip this case; SQLite page-limit tests still run on Windows/Linux. From `perf` on Linux:
+
+```sh
+CGO_ENABLED=1 go test -race -c -o /tmp/slogs-perf-acceptance.test .
+sudo /tmp/slogs-perf-acceptance.test -test.run TestAcceptanceFilesystemFull -test.v
+```
+
+The soak test is opt-in and skipped by default. From `perf` on Windows:
+
+```powershell
+$env:CGO_ENABLED = "1"
+$env:SLOGS_SOAK_DURATION = "10m"
+go test . -run TestAcceptanceSoak -count=1 -timeout=12m -v
+Remove-Item Env:SLOGS_SOAK_DURATION
+```
+
+On Linux use `CGO_ENABLED=1 SLOGS_SOAK_DURATION=10m go test . -run TestAcceptanceSoak -count=1 -timeout=12m -v`. Both SQLite configurations run with 16 producer workers each, approximately 500 records/s per target and five-second bursts at approximately 5000/s each minute, 1KiB payloads, request cancellation, and derived-view changes. The sampler reports post-GC heap/objects, process RSS/private memory (including native allocations), goroutines, queue occupancy and write/drop counters every 30 seconds. Accounting and integrity are checked after draining. Burst drops are allowed and reported, not classified as write failures or hidden as successful writes.
+
+After warmup, the first/last three sample medians are compared: permitted increases are 32MiB Go heap, 128MiB RSS/private memory, and eight goroutines. These coarse bounds are pre-acceptance heuristics, not proof against leaks. Windows private memory is committed private bytes; Linux uses private clean/dirty pages, so absolute values are not cross-platform equivalents. A ten-minute simulated run does not validate hours/days of stability or a real business handler/workload. macOS validation is limited to pure-Go root-module amd64/arm64 cross-compilation, not runtime or CGO SQLite execution.
+
 ## Installation
 
 ```bash
